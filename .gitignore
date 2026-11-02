@@ -1,0 +1,14 @@
+# Datos reales y credenciales: nunca subirlos
+dashboard/data/*.json
+*.csv
+*.env
+.env*
+credentials*.json
+*token*
+
+# Sistema / editores
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

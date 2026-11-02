@@ -1,0 +1,2045 @@
+<!doctype html><html lang="es"><head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monitor CD-01</title>
+  
+  
+  <style>
+    :root {
+      --yellow: #FFE600;
+      --dark: #1a1a2e;
+      --dark2: #16213e;
+      --white: #ffffff;
+      --bg: #f4f5f7;
+      --card: #ffffff;
+      --text: #1a1a2e;
+      --text2: #6b7280;
+      --green: #00a650;
+      --yellow-warn: #f5a623;
+      --red: #e30613;
+      --border: #e5e7eb;
+      --shadow: 0 2px 8px rgba(0,0,0,0.08);
+      --radius: 10px;
+      --gap: 16px;
+    }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      min-width: 1280px;
+    }
+
+    /* ── HEADER ── */
+    .header {
+      background: var(--dark);
+      color: #fff;
+      padding: 0 28px;
+      height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.25);
+    }
+    .header-left { display:flex; align-items:center; gap:14px; }
+    .ml-logo {
+      width:36px; height:36px; background:var(--yellow);
+      border-radius:8px; display:flex; align-items:center; justify-content:center;
+      font-weight:900; font-size:15px; color:var(--dark); letter-spacing:-1px; flex-shrink:0;
+    }
+    .header-title { font-size:17px; font-weight:700; color:#fff; }
+    .header-sub { font-size:12px; color:rgba(255,255,255,0.5); margin-top:1px; }
+    .header-right { font-size:12px; color:rgba(255,255,255,0.6); text-align:right; }
+    .header-right strong { color:var(--yellow); font-size:13px; }
+
+    /* ── DATE BAR ── */
+    .date-bar {
+      background: var(--dark2);
+      padding: 10px 28px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 2px solid var(--yellow);
+      position: sticky;
+      top: 0;
+      z-index: 200;
+    }
+    .date-bar label { color:rgba(255,255,255,0.7); font-size:12px; font-weight:500; }
+    .date-bar input[type=date] {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius:6px;
+      color:#fff;
+      padding: 6px 12px;
+      font-size:13px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .date-bar input[type=date]::-webkit-calendar-picker-indicator { filter: invert(1); cursor:pointer; }
+    .date-nav-btn {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius:6px;
+      color:#fff;
+      padding: 6px 12px;
+      font-size:13px;
+      cursor:pointer;
+      font-family:inherit;
+      transition: background 0.15s;
+    }
+    .date-nav-btn:hover { background: rgba(255,230,0,0.15); border-color:var(--yellow); }
+
+    .data-status { margin-left:auto; font-size:12px; }
+    .data-status .badge {
+      display:inline-block; padding:3px 10px; border-radius:20px;
+      font-weight:600; font-size:11px;
+    }
+    .badge-live { background:rgba(0,166,80,0.2); color:#4ade80; border:1px solid rgba(0,166,80,0.4); }
+    .badge-mock { background:rgba(245,166,35,0.2); color:var(--yellow-warn); border:1px solid rgba(245,166,35,0.4); }
+
+    /* ── MAIN CONTAINER ── */
+    .main { padding: var(--gap) 28px 32px; }
+
+    /* ── KPI CARDS ── */
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: var(--gap);
+      margin-bottom: var(--gap);
+    }
+    .kpi-card {
+      background: var(--card);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      box-shadow: var(--shadow);
+      border-left: 4px solid transparent;
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.15s;
+    }
+    .kpi-card:hover { transform: translateY(-2px); }
+    .kpi-card::before {
+      content:'';
+      position:absolute; top:0;right:0;
+      width:60px; height:60px;
+      background:var(--yellow);
+      opacity:0.06;
+      border-radius:50%;
+      transform:translate(20px,-20px);
+    }
+    .kpi-card.accent-yellow { border-left-color: var(--yellow); }
+    .kpi-card.accent-green  { border-left-color: var(--green); }
+    .kpi-card.accent-blue   { border-left-color: #4e79a7; }
+    .kpi-card.accent-orange { border-left-color: #f28e2b; }
+    .kpi-card.accent-purple { border-left-color: #b07aa1; }
+    .kpi-icon { font-size:22px; margin-bottom:6px; }
+    .kpi-label { font-size:11px; text-transform:uppercase; letter-spacing:0.6px; color:var(--text2); font-weight:600; }
+    .kpi-value { font-size:26px; font-weight:800; color:var(--text); margin:4px 0 2px; line-height:1; }
+    .kpi-sub { font-size:12px; color:var(--text2); }
+
+    /* ── TABS ── */
+    .tabs-wrapper {
+      background: var(--card);
+      border-radius: var(--radius) var(--radius) 0 0;
+      border-bottom: 2px solid var(--border);
+      box-shadow: var(--shadow);
+    }
+    .tabs {
+      display:flex;
+      padding: 0 20px;
+      gap: 0;
+    }
+    .tab-btn {
+      padding: 14px 22px;
+      font-size:13px; font-weight:600;
+      color: var(--text2);
+      background: none;
+      border: none;
+      cursor: pointer;
+      border-bottom: 3px solid transparent;
+      margin-bottom: -2px;
+      transition: all 0.15s;
+      font-family: inherit;
+      white-space: nowrap;
+    }
+    .tab-btn:hover { color:var(--text); background:var(--bg); }
+    .tab-btn.active { color:var(--dark); border-bottom-color: var(--yellow); background:rgba(255,230,0,0.05); }
+    .tab-content {
+      background: var(--card);
+      border-radius: 0 0 var(--radius) var(--radius);
+      padding: 24px;
+      box-shadow: var(--shadow);
+      min-height: 480px;
+    }
+    .tab-pane { display:none; }
+    .tab-pane.active { display:block; }
+
+    /* ── PROCESS SECTION (within tabs) ── */
+    .proc-section {
+      margin-bottom: 36px;
+      padding-left: 16px;
+      border-left: 4px solid var(--yellow);
+    }
+    .proc-section.ci  { border-left-color: #3483FA; }
+    .proc-section.dci { border-left-color: #00a650; }
+    .proc-section-title {
+      font-size: 14px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--dark);
+      margin-bottom: 16px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .proc-section-title .proc-pill {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 700;
+      background: var(--yellow);
+      color: var(--dark);
+    }
+    .proc-section.ci .proc-pill { background: #3483FA; color: #fff; }
+    .proc-section.dci .proc-pill { background: #00a650; color: #fff; }
+    .proc-nodata {
+      display:flex; align-items:center; gap:10px;
+      color:var(--text2); font-size:13px; padding:20px 0;
+    }
+    .proc-nodata-icon { font-size:24px; opacity:0.4; }
+
+    /* ── NO DATA ── */
+    .no-data {
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      min-height:300px; color:var(--text2); gap:12px;
+    }
+    .no-data-icon { font-size:48px; opacity:0.3; }
+    .no-data-text { font-size:16px; font-weight:500; }
+
+    /* ── CHART GRID ── */
+    .chart-grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:var(--gap); margin-bottom:var(--gap); }
+    .chart-grid-1 { margin-bottom:var(--gap); }
+    .chart-box {
+      background: var(--bg);
+      border-radius:8px;
+      padding:18px;
+    }
+    .chart-box h4 { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--text2); margin-bottom:14px; }
+    .chart-box canvas { max-height:280px; }
+
+    /* ── BF SECTION ── */
+    .bf-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:12px; margin-bottom:20px; }
+    .bf-card {
+      background:var(--bg);
+      border-radius:8px;
+      padding:14px 10px;
+      text-align:center;
+      border-top:4px solid #ccc;
+      transition: transform 0.15s;
+    }
+    .bf-card:hover { transform:translateY(-2px); }
+    .bf-card.good  { border-top-color: var(--green); }
+    .bf-card.warn  { border-top-color: var(--yellow-warn); }
+    .bf-card.bad   { border-top-color: var(--red); }
+    .bf-area { font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text2); margin-bottom:6px; }
+    .bf-pct  { font-size:28px; font-weight:900; line-height:1; margin-bottom:4px; }
+    .bf-pct.good { color:var(--green); }
+    .bf-pct.warn { color:var(--yellow-warn); }
+    .bf-pct.bad  { color:var(--red); }
+    .bf-badge {
+      display:inline-block; font-size:10px; padding:2px 8px;
+      border-radius:10px; font-weight:600;
+    }
+    .bf-badge.good { background:rgba(0,166,80,0.1); color:var(--green); }
+    .bf-badge.warn { background:rgba(245,166,35,0.1); color:var(--yellow-warn); }
+    .bf-badge.bad  { background:rgba(227,6,19,0.1); color:var(--red); }
+    .bf-sparklines { display:grid; grid-template-columns:repeat(7,1fr); gap:12px; margin-top:16px; }
+    .bf-sparkline-box { background:var(--bg); border-radius:8px; padding:12px; }
+    .bf-sparkline-box h5 { font-size:11px; font-weight:700; color:var(--text2); margin-bottom:8px; text-align:center; }
+    .bf-sparkline-box canvas { height:70px !important; max-height:70px; }
+
+    /* ── TOTE CARDS ── */
+    .tote-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:16px; }
+    .tote-card {
+      background:var(--bg); border-radius:8px; padding:14px 10px;
+      text-align:center; border-top:4px solid #ccc; transition:transform 0.15s;
+    }
+    .tote-card:hover { transform:translateY(-2px); }
+    .tote-card-label { font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text2); margin-bottom:6px; }
+    .tote-card-val { font-size:28px; font-weight:900; line-height:1; margin-bottom:4px; }
+    .tote-sparklines-5 { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-top:16px; }
+
+    /* ── REPS CARDS ── */
+    .reps-stat-row { display:grid; grid-template-columns:repeat(6,1fr); gap:12px; margin-bottom:16px; }
+    .rep-stat-card {
+      background:var(--card); border-radius:8px; padding:12px; text-align:center;
+      border-left:4px solid #ccc; box-shadow: var(--shadow);
+    }
+    .rep-stat-card.nh1 { border-left-color:#e15759; }
+    .rep-stat-card.nh2 { border-left-color:#f28e2b; }
+    .rep-stat-card.nh3 { border-left-color:#edc948; }
+    .rep-stat-card.nativo { border-left-color:#59a14f; }
+    .rep-stat-card.pt { border-left-color:#4e79a7; }
+    .rep-stat-card.palanca { border-left-color:#b07aa1; }
+    .rep-stat-label { font-size:11px; font-weight:700; color:var(--text2); text-transform:uppercase; }
+    .rep-stat-val   { font-size:22px; font-weight:900; margin:4px 0 2px; }
+    .rep-stat-pct   { font-size:12px; color:var(--text2); }
+
+    /* ── SHARE TABLE ── */
+    .share-table-wrap { overflow-x:auto; margin-top:20px; }
+    .share-table { width:100%; border-collapse:collapse; font-size:13px; }
+    .share-table th {
+      padding:10px 14px; text-align:left; border-bottom:2px solid var(--border);
+      font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(--text2); font-weight:700;
+    }
+    .share-table td { padding:10px 14px; border-bottom:1px solid var(--border); }
+    .share-table tbody tr:hover { background:var(--bg); }
+    .share-table .shr-bar-wrap { background:#f0f0f0; border-radius:4px; height:8px; width:120px; display:inline-block; vertical-align:middle; }
+    .share-table .shr-bar { height:100%; border-radius:4px; }
+
+    /* ── DETALLE TABLE ── */
+    .detalle-wrap { overflow-x:auto; margin-bottom:8px; }
+    .detalle-table { width:100%; border-collapse:collapse; font-size:12px; }
+    .detalle-table th {
+      padding:9px 10px; text-align:center; border-bottom:2px solid var(--border);
+      font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(--text2); font-weight:700;
+      white-space:nowrap; background:var(--bg); position:sticky; top:0;
+    }
+    .detalle-table td { padding:9px 10px; border-bottom:1px solid var(--border); text-align:center; white-space:nowrap; }
+    .detalle-table tbody tr:hover { background:#fffde7; }
+    .detalle-table tfoot td {
+      background:var(--dark); color:#fff; font-weight:700;
+      padding:10px; text-align:center;
+    }
+    .bf-cell {
+      display:inline-block; padding:2px 8px; border-radius:4px; font-weight:700; font-size:11px;
+    }
+    .bf-cell.good { background:rgba(0,166,80,0.12); color:var(--green); }
+    .bf-cell.warn { background:rgba(245,166,35,0.12); color:var(--yellow-warn); }
+    .bf-cell.bad  { background:rgba(227,6,19,0.12); color:var(--red); }
+
+    /* ── TOP AREAS ROW ── */
+    .top-areas { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:16px; }
+    .top-area-card {
+      background:var(--bg); border-radius:8px; padding:14px 16px;
+      display:flex; align-items:center; gap:12px;
+    }
+    .top-area-rank {
+      width:28px; height:28px; border-radius:50%;
+      background:var(--yellow); color:var(--dark);
+      font-weight:900; font-size:13px;
+      display:flex; align-items:center; justify-content:center; flex-shrink:0;
+    }
+    .top-area-rank.r2 { background:#e0e0e0; }
+    .top-area-rank.r3 { background:#f0c060; }
+    .top-area-name { font-weight:700; font-size:13px; color:var(--text); }
+    .top-area-val  { font-size:12px; color:var(--text2); }
+
+    /* ── FOOTER ── */
+    .dashboard-footer {
+      text-align:center; padding:16px; color:var(--text2); font-size:11px; margin-top:var(--gap);
+    }
+    .loading-overlay {
+      position:fixed; inset:0; background:rgba(26,26,46,0.85);
+      display:flex; align-items:center; justify-content:center; z-index:9999;
+      flex-direction:column; gap:16px;
+    }
+    .loading-spinner {
+      width:48px; height:48px; border:4px solid rgba(255,230,0,0.2);
+      border-top-color:var(--yellow); border-radius:50%;
+      animation: spin 0.8s linear infinite;
+    }
+    .loading-text { color:#fff; font-size:15px; font-weight:500; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+  
+    /* ── HOUR FILTER ── */
+    .hour-inp {
+      width:52px; background:rgba(255,255,255,0.1);
+      border:1px solid rgba(255,255,255,0.2); border-radius:6px;
+      color:#fff; padding:6px 8px; font-size:13px;
+      font-family:inherit; text-align:center;
+    }
+    .hour-inp:focus { outline:none; border-color:var(--yellow); }
+    .hour-inp::placeholder { color:rgba(255,255,255,0.35); }
+    .hour-tag {
+      display:inline-flex; align-items:center; gap:6px;
+      background:rgba(255,230,0,0.15); border:1px solid rgba(255,230,0,0.35);
+      border-radius:20px; padding:3px 12px;
+      font-size:12px; font-weight:600; color:var(--yellow);
+    }
+    .hour-tag-clr {
+      background:none; border:none; cursor:pointer;
+      color:rgba(255,230,0,0.7); font-size:14px; padding:0; line-height:1;
+    }
+    .hour-tag-clr:hover { color:var(--yellow); }
+    /* ── TOTE LEGEND INLINE (volumetría) ── */
+    .tote-legend-row {
+      display:flex; gap:18px; font-size:11px; color:var(--text2);
+      margin-top:-8px; margin-bottom:10px; padding-left:2px;
+    }
+    .tote-legend-dot { width:11px; height:11px; border-radius:2px; display:inline-block; margin-right:4px; vertical-align:middle; }
+  
+    /* ── TOTE DUAL CHARTS ── */
+    .tote-dual-row {
+      display:grid; grid-template-columns:1fr 1fr; gap:var(--gap);
+      margin-top:var(--gap);
+    }
+    @media(max-width:900px){ .tote-dual-row { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="loading-spinner"></div>
+  <div class="loading-text">Cargando datos CD-01...</div>
+</div>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-left">
+    <div class="ml-logo">IM</div>
+    <div>
+      <div class="header-title">Inbound Monitor Hora a Hora&nbsp; — CD-01</div>
+      <div class="header-sub">Warehouse Management System · Fulfillment Center Chile</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div>Actualizado:</div>
+    <strong id="updateTimestamp">—</strong>
+    
+  </div>
+</div>
+
+<!-- DATE BAR -->
+<div class="date-bar">
+  <label>Ver datos de:</label>
+  <button class="date-nav-btn" id="btnPrevDay">← Anterior</button>
+  <input type="date" id="datePicker">
+  <button class="date-nav-btn" id="btnNextDay">Siguiente →</button>
+  <span style="color:rgba(255,255,255,0.25);margin:0 4px;font-size:18px">|</span>
+  <label style="color:rgba(255,255,255,0.6);font-size:12px;font-weight:500">Turno&nbsp;De</label>
+  <input type="number" class="hour-inp" id="hourFrom" min="0" max="23" placeholder="0">
+  <span style="color:rgba(255,255,255,0.5);font-size:13px">→</span>
+  <input type="number" class="hour-inp" id="hourTo" min="0" max="23" placeholder="23">
+  <button class="date-nav-btn" id="btnApplyHour">Filtrar</button>
+  <span class="hour-tag" id="hourTag" style="display:none">
+    <span id="hourTagTxt"></span>
+    <button class="hour-tag-clr" id="btnClearHour" title="Quitar filtro">✕</button>
+  </span>
+  <div class="data-status">
+    <span class="badge badge-mock" id="dataSourceBadge">MOCK DATA</span>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- KPI ROW (PUTAWAY) -->
+  <div class="kpi-row">
+    <div class="kpi-card accent-yellow">
+      <div class="kpi-icon">📦</div>
+      <div class="kpi-label">Total Unidades</div>
+      <div class="kpi-value" id="kpi-und">—</div>
+      <div class="kpi-sub" id="kpi-und-sub">GUARDADO del día</div>
+    </div>
+    <div class="kpi-card accent-blue">
+      <div class="kpi-icon">📐</div>
+      <div class="kpi-label">Total Volumen</div>
+      <div class="kpi-value" id="kpi-vol">—</div>
+      <div class="kpi-sub">litros GUARDADO</div>
+    </div>
+    <div class="kpi-card accent-orange">
+      <div class="kpi-icon">⚖️</div>
+      <div class="kpi-label">L / Unidad</div>
+      <div class="kpi-value" id="kpi-lxu">—</div>
+      <div class="kpi-sub">promedio ponderado</div>
+    </div>
+    <div class="kpi-card accent-green">
+      <div class="kpi-icon">🧺</div>
+      <div class="kpi-label">% Toteable</div>
+      <div class="kpi-value" id="kpi-tot">—</div>
+      <div class="kpi-sub">promedio ponderado</div>
+    </div>
+    <div class="kpi-card accent-purple">
+      <div class="kpi-icon">👷</div>
+      <div class="kpi-label">Reps Activos</div>
+      <div class="kpi-value" id="kpi-reps">—</div>
+      <div class="kpi-sub">máximo del día (Guardado)</div>
+    </div>
+  </div>
+
+  <!-- TABS -->
+  <div class="tabs-wrapper">
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="volumetria">📊 Volumetría</button>
+      <button class="tab-btn" data-tab="binfullness">🗄️ Binfullness</button>
+      <button class="tab-btn" data-tab="tiporeps">👷 Tipo Reps</button>
+      <button class="tab-btn" data-tab="share">📋 Share</button>
+      <button class="tab-btn" data-tab="detalle">🔍 Detalle</button>
+    </div>
+  </div>
+  <div class="tab-content">
+
+    <!-- TAB 1: VOLUMETRÍA (3 procesos) -->
+    <div class="tab-pane active" id="tab-volumetria">
+
+      <!-- PUTAWAY -->
+      <div class="proc-section">
+        <div class="proc-section-title">
+          <span class="proc-pill">GUARDADO</span> 📦 Distribución de Unidades por Área
+        </div>
+        <div id="pu-vol-nodata" class="proc-nodata" style="display:none">
+          <span class="proc-nodata-icon">📭</span> Sin datos GUARDADO para esta fecha
+        </div>
+        <div id="pu-vol-content">
+          <div class="chart-box chart-grid-1">
+            <h4>Unidades por Área — Distribución Horaria</h4>
+            <canvas id="chartVolStack_PU" style="max-height:300px"></canvas>
+          </div>
+          <div class="chart-box chart-grid-1" style="margin-top:var(--gap)">
+            <h4>Litros por Unidad — Toteable vs No Toteable</h4>
+            <div class="tote-legend-row">
+              <span><span class="tote-legend-dot" style="background:#3483FA"></span>Toteable (L/ud)</span>
+              <span><span class="tote-legend-dot" style="background:#00a650"></span>No Toteable (L/ud)</span>
+            </div>
+            <canvas id="chartLxU_PU" style="max-height:200px"></canvas>
+          </div>
+          <div class="top-areas" id="topAreasRow_PU"></div>
+        </div>
+      </div>
+
+      <!-- CHECKIN -->
+      <div class="proc-section ci">
+        <div class="proc-section-title">
+          <span class="proc-pill">CHEQUEADO</span> ✅ Volumen y Totes
+        </div>
+        <div id="ci-vol-nodata" class="proc-nodata" style="display:none">
+          <span class="proc-nodata-icon">📭</span> Sin datos CHEQUEADO para esta fecha
+        </div>
+        <div id="ci-vol-content">
+          <div class="chart-box chart-grid-1">
+            <h4>Uds CHEQUEADO y Totes — Evolución Horaria</h4>
+            <canvas id="chartVolStack_CI" style="max-height:280px"></canvas>
+          </div>
+          <div class="chart-box chart-grid-1" style="margin-top:var(--gap)">
+            <h4>Litros por Unidad — Toteable vs No Toteable</h4>
+            <div class="tote-legend-row">
+              <span><span class="tote-legend-dot" style="background:#3483FA"></span>Toteable (L/ud)</span>
+              <span><span class="tote-legend-dot" style="background:#00a650"></span>No Toteable (L/ud)</span>
+            </div>
+            <canvas id="chartLxU_CI" style="max-height:200px"></canvas>
+          </div>
+          <div class="chart-box chart-grid-1" style="margin-top:var(--gap)">
+            <h4>Kg por Unidad — Toteable vs No Toteable</h4>
+            <div class="tote-legend-row">
+              <span><span class="tote-legend-dot" style="background:#f5a623"></span>Toteable (Kg/ud)</span>
+              <span><span class="tote-legend-dot" style="background:#e02020"></span>No Toteable (Kg/ud)</span>
+            </div>
+            <canvas id="chartKgU_CI" style="max-height:200px"></canvas>
+          </div>
+          <div class="top-areas" id="topAreasRow_CI"></div>
+        </div>
+      </div>
+
+      <!-- DCI -->
+      <div class="proc-section dci">
+        <div class="proc-section-title">
+          <span class="proc-pill">RECEPCIÓN RÁPIDA</span> 🔄 Volumen y Totes
+        </div>
+        <div id="dci-vol-nodata" class="proc-nodata" style="display:none">
+          <span class="proc-nodata-icon">📭</span> Sin datos RECEPCIÓN RÁPIDA para esta fecha
+        </div>
+        <div id="dci-vol-content">
+          <div class="chart-box chart-grid-1">
+            <h4>Uds RECEPCIÓN RÁPIDA y Totes — Evolución Horaria</h4>
+            <canvas id="chartVolStack_DCI" style="max-height:280px"></canvas>
+          </div>
+          <div class="chart-box chart-grid-1" style="margin-top:var(--gap)">
+            <h4>Litros por Unidad — Toteable vs No Toteable</h4>
+            <div class="tote-legend-row">
+              <span><span class="tote-legend-dot" style="background:#3483FA"></span>Toteable (L/ud)</span>
+              <span><span class="tote-legend-dot" style="background:#00a650"></span>No Toteable (L/ud)</span>
+            </div>
+            <canvas id="chartLxU_DCI" style="max-height:200px"></canvas>
+          </div>
+          <div class="chart-box chart-grid-1" style="margin-top:var(--gap)">
+            <h4>Kg por Unidad — Toteable vs No Toteable</h4>
+            <div class="tote-legend-row">
+              <span><span class="tote-legend-dot" style="background:#f5a623"></span>Toteable (Kg/ud)</span>
+              <span><span class="tote-legend-dot" style="background:#e02020"></span>No Toteable (Kg/ud)</span>
+            </div>
+            <canvas id="chartKgU_DCI" style="max-height:200px"></canvas>
+          </div>
+          <div class="top-areas" id="topAreasRow_DCI"></div>
+        </div>
+      </div>
+
+    </div><!-- /tab-volumetria -->
+
+    <!-- TAB 2: BINFULLNESS (solo PUTAWAY) -->
+    <div class="tab-pane" id="tab-binfullness">
+      <div id="bf-nodata" class="no-data" style="display:none">
+        <div class="no-data-icon">📭</div>
+        <div class="no-data-text">Sin datos GUARDADO para esta fecha</div>
+      </div>
+      <div id="bf-content">
+        <div id="bfCardsRow" class="bf-grid"></div>
+        <div class="chart-box">
+          <h4>Binfullness por Área (último valor disponible)</h4>
+          <canvas id="chartBF" style="max-height:260px"></canvas>
+        </div>
+        <div id="bfSparklines" class="bf-sparklines"></div>
+      </div>
+
+      <!-- ── TOTEFULLNESS ── -->
+      <div class="proc-section" style="margin-top:20px">
+        <div class="proc-section-title">
+          <span class="proc-pill" style="background:#6c3483;color:#fff">🏋️</span>
+          Totefullness — % Saturación del Tote (ítems Toteables · Vol cap: 51.4 L · Peso máx: 15 kg)
+        </div>
+        <div id="tf-content">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+            <div>
+              <div style="font-size:11px;font-weight:700;color:#3483fa;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">CHEQUEADO</div>
+              <div id="tfCardsCI" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px"></div>
+            </div>
+            <div>
+              <div style="font-size:11px;font-weight:700;color:#00a650;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">RECEPCIÓN RÁPIDA</div>
+              <div id="tfCardsDCI" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px"></div>
+            </div>
+          </div>
+          <div class="chart-box">
+            <h4>Saturafullness Hora a Hora — Chequeado vs Recepción Rápida
+              <span style="float:right;font-size:11px;font-weight:400;color:#9b59b6">▬ Target 75%</span>
+            </h4>
+            <canvas id="chartTFHora" style="max-height:260px"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: TIPO REPS (3 procesos) -->
+    <div class="tab-pane" id="tab-tiporeps">
+
+      <!-- PUTAWAY -->
+      <div class="proc-section">
+        <div class="proc-section-title">
+          <span class="proc-pill">GUARDADO</span> 👷 Composición de Representantes
+        </div>
+        <div id="pu-reps-nodata" class="proc-nodata" style="display:none">
+          <span class="proc-nodata-icon">📭</span> Sin datos GUARDADO para esta fecha
+        </div>
+        <div id="pu-reps-content">
+          <div class="reps-stat-row" id="repsStatRow_PU"></div>
+          <div class="chart-grid-2">
+            <div class="chart-box">
+              <h4>Composición por Hora</h4>
+              <canvas id="chartRepsStack_PU" style="max-height:280px"></canvas>
+            </div>
+            <div class="chart-box">
+              <h4>Composición Total del Día</h4>
+              <canvas id="chartRepsDonut_PU" style="max-height:280px"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CHECKIN -->
+      <div class="proc-section ci">
+        <div class="proc-section-title">
+          <span class="proc-pill">CHEQUEADO</span> 👷 Composición de Representantes
+        </div>
+        <div id="ci-reps-nodata" class="proc-nodata" style="display:none">
+          <span class="proc-nodata-icon">📭</span> Sin datos CHEQUEADO para esta fecha
+        </div>
+        <div id="ci-reps-content">
+          <div class="reps-stat-row" id="repsStatRow_CI"></div>
+          <div class="chart-grid-2">
+            <div class="chart-box">
+              <h4>Composición por Hora</h4>
+              <canvas id="chartRepsStack_CI" style="max-height:280px"></canvas>
+            </div>
+            <div class="chart-box">
+              <h4>Composición Total del Día</h4>
+              <canvas id="chartRepsDonut_CI" style="max-height:280px"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DCI -->
+      <div class="proc-section dci">
+        <div class="proc-section-title">
+          <span class="proc-pill">RECEPCIÓN RÁPIDA</span> 👷 Composición de Representantes
+        </div>
+        <div id="dci-reps-nodata" class="proc-nodata" style="display:none">
+          <span class="proc-nodata-icon">📭</span> Sin datos RECEPCIÓN RÁPIDA para esta fecha
+        </div>
+        <div id="dci-reps-content">
+          <div class="reps-stat-row" id="repsStatRow_DCI"></div>
+          <div class="chart-grid-2">
+            <div class="chart-box">
+              <h4>Composición por Hora</h4>
+              <canvas id="chartRepsStack_DCI" style="max-height:280px"></canvas>
+            </div>
+            <div class="chart-box">
+              <h4>Composición Total del Día</h4>
+              <canvas id="chartRepsDonut_DCI" style="max-height:280px"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /tab-tiporeps -->
+
+    <!-- TAB 4: SHARE (PUTAWAY por área + CHECKIN totes + DCI totes) -->
+    <div class="tab-pane" id="tab-share">
+
+      <!-- PUTAWAY: Share por Área -->
+      <div class="proc-section">
+        <div class="proc-section-title">
+          <span class="proc-pill">GUARDADO</span> 📋 Share por Área de Guardado
+        </div>
+        <div id="pu-shr-nodata" class="proc-nodata" style="display:none">
+          <span class="proc-nodata-icon">📭</span> Sin datos GUARDADO para esta fecha
+        </div>
+        <div id="pu-shr-content">
+          <div class="chart-grid-2">
+            <div class="chart-box">
+              <h4>Share Promedio del Día</h4>
+              <canvas id="chartShrDonut" style="max-height:280px"></canvas>
+            </div>
+            <div class="chart-box">
+              <h4>Share por Hora (Apilado)</h4>
+              <canvas id="chartShrStack" style="max-height:280px"></canvas>
+            </div>
+          </div>
+          <div class="share-table-wrap">
+            <table class="share-table">
+              <thead><tr>
+                <th>Área</th><th>Unidades</th><th>% Share</th>
+                <th>Distribución</th><th>L / Unidad</th>
+              </tr></thead>
+              <tbody id="shareTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- CHECKIN: Tipo de Tote -->
+      <div class="proc-section ci">
+        <div class="proc-section-title">
+          <span class="proc-pill">CHEQUEADO</span> 🧺 Tipo de Tote
+        </div>
+        <div id="ci-shr-nodata" class="proc-nodata" style="display:none">
+          <span class="proc-nodata-icon">📭</span> Sin datos CHEQUEADO para esta fecha
+        </div>
+        <div id="ci-shr-content">
+          <div class="chart-box" style="margin-bottom:var(--gap)">
+            <h4>Totes por Tipo (XS/S/M/L/XL) — Evolución Horaria</h4>
+            <canvas id="chartCIToteHora" style="max-height:280px"></canvas>
+          </div>
+          <div class="chart-box">
+            <h4>% del Total del Día — por Tipo de Tote</h4>
+            <canvas id="chartCIToteDia" style="max-height:200px"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- DCI: Tipo de Tote -->
+      <div class="proc-section dci">
+        <div class="proc-section-title">
+          <span class="proc-pill">RECEPCIÓN RÁPIDA</span> 🧺 Tipo de Tote
+        </div>
+        <div id="dci-shr-nodata" class="proc-nodata" style="display:none">
+          <span class="proc-nodata-icon">📭</span> Sin datos RECEPCIÓN RÁPIDA para esta fecha
+        </div>
+        <div id="dci-shr-content">
+          <div class="chart-box" style="margin-bottom:var(--gap)">
+            <h4>Totes por Tipo (XS/S/M/L/XL) — Evolución Horaria</h4>
+            <canvas id="chartDCIToteHora" style="max-height:280px"></canvas>
+          </div>
+          <div class="chart-box">
+            <h4>% del Total del Día — por Tipo de Tote</h4>
+            <canvas id="chartDCIToteDia" style="max-height:200px"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- CHECKIN: Share de Peso por Tote -->
+      <div class="proc-section ci">
+        <div class="proc-section-title">
+          <span class="proc-pill">CHEQUEADO</span> ⚖️ Peso por Tote — Distribución
+        </div>
+        <div id="ci-kg-nodata" class="proc-nodata" style="display:none">
+          <span class="proc-nodata-icon">📭</span> Sin datos CHEQUEADO para esta fecha
+        </div>
+        <div id="ci-kg-content">
+          <div class="chart-box" style="margin-bottom:var(--gap)">
+            <h4>Totes por Rango de Peso (kg) — Evolución Horaria</h4>
+            <canvas id="chartCIKgHora" style="max-height:280px"></canvas>
+          </div>
+          <div class="chart-box">
+            <h4>% del Total del Día — por Rango de Kg</h4>
+            <canvas id="chartCIKgDia" style="max-height:200px"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- DCI: Share de Peso por Tote -->
+      <div class="proc-section dci">
+        <div class="proc-section-title">
+          <span class="proc-pill">RECEPCIÓN RÁPIDA</span> ⚖️ Peso por Tote — Distribución
+        </div>
+        <div id="dci-kg-nodata" class="proc-nodata" style="display:none">
+          <span class="proc-nodata-icon">📭</span> Sin datos RECEPCIÓN RÁPIDA para esta fecha
+        </div>
+        <div id="dci-kg-content">
+          <div class="chart-box" style="margin-bottom:var(--gap)">
+            <h4>Totes por Rango de Peso (kg) — Evolución Horaria</h4>
+            <canvas id="chartDCIKgHora" style="max-height:280px"></canvas>
+          </div>
+          <div class="chart-box">
+            <h4>% del Total del Día — por Rango de Kg</h4>
+            <canvas id="chartDCIKgDia" style="max-height:200px"></canvas>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- TAB 5: DETALLE (3 procesos) -->
+    <div class="tab-pane" id="tab-detalle">
+
+      <!-- PUTAWAY -->
+      <div class="proc-section">
+        <div class="proc-section-title">
+          <span class="proc-pill">GUARDADO</span> 🔍 Detalle Horario
+        </div>
+        <div id="pu-det-nodata" class="proc-nodata" style="display:none">
+          <span class="proc-nodata-icon">📭</span> Sin datos GUARDADO para esta fecha
+        </div>
+        <div id="pu-det-content" class="detalle-wrap">
+          <table class="detalle-table">
+            <thead id="detalleHead_PU"></thead>
+            <tbody id="detalleBody_PU"></tbody>
+            <tfoot id="detalleFoot_PU"></tfoot>
+          </table>
+        </div>
+      </div>
+
+      <!-- CHECKIN -->
+      <div class="proc-section ci">
+        <div class="proc-section-title">
+          <span class="proc-pill">CHEQUEADO</span> 🔍 Detalle Horario
+        </div>
+        <div id="ci-det-nodata" class="proc-nodata" style="display:none">
+          <span class="proc-nodata-icon">📭</span> Sin datos CHEQUEADO para esta fecha
+        </div>
+        <div id="ci-det-content" class="detalle-wrap">
+          <table class="detalle-table">
+            <thead id="detalleHead_CI"></thead>
+            <tbody id="detalleBody_CI"></tbody>
+            <tfoot id="detalleFoot_CI"></tfoot>
+          </table>
+        </div>
+      </div>
+
+      <!-- DCI -->
+      <div class="proc-section dci">
+        <div class="proc-section-title">
+          <span class="proc-pill">RECEPCIÓN RÁPIDA</span> 🔍 Detalle Horario
+        </div>
+        <div id="dci-det-nodata" class="proc-nodata" style="display:none">
+          <span class="proc-nodata-icon">📭</span> Sin datos RECEPCIÓN RÁPIDA para esta fecha
+        </div>
+        <div id="dci-det-content" class="detalle-wrap">
+          <table class="detalle-table">
+            <thead id="detalleHead_DCI"></thead>
+            <tbody id="detalleBody_DCI"></tbody>
+            <tfoot id="detalleFoot_DCI"></tfoot>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /tab-detalle -->
+
+  </div><!-- /tab-content -->
+
+  <div class="dashboard-footer">
+    Inbound Monitor CD-01 · Centro de Distribución · Guardado · Chequeado · Recepción Rápida
+  </div>
+</div><!-- /main -->
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<script src="vendor/chart.umd.min.js"></script>
+<script>
+// ═══════════════════════════════════════════
+//  CONFIG
+// ═══════════════════════════════════════════
+// Sin conexión a datos reales el dashboard usa datos de ejemplo generados aquí.
+// Para usar datos reales: deja dashboard/data/peak_data.json (lo que exporta el workflow n8n)
+// y sirve la carpeta por HTTP.
+const USE_MOCK = false;
+let __seed = 20261029;
+function rand(){ __seed = (__seed * 1664525 + 1013904223) % 4294967296; return __seed / 4294967296; }
+
+// ═══════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════
+let ALL_DATA = [];
+let selectedDate = '';
+let hourFrom = null;
+let hourTo   = null;
+
+// ═══════════════════════════════════════════
+//  CONSTANTS
+// ═══════════════════════════════════════════
+const AREA_COLORS = {
+  MZ0:'#4e79a7', MZ1:'#f28e2b', MZ2:'#e15759', MZ3:'#76b7b2',
+  HS:'#59a14f',  RK:'#edc948',  BL:'#b07aa1',  HV:'#ff9da7'
+};
+const REP_COLORS = {
+  NH1:'#e15759', NH2:'#f28e2b', NH3:'#edc948',
+  NATIVO:'#59a14f', PT:'#4e79a7', PALANCA:'#b07aa1'
+};
+const AREAS    = ['MZ0','MZ1','MZ2','MZ3','HS','RK','HV'];
+const BF_AREAS = ['MZ0','MZ1','MZ2','MZ3','HS','RK','HV'];
+const TOTE_SIZES  = ['XS','S','M','L','XL'];
+// XS=rojo (menos productivo) → XL=verde (más productivo)
+const TOTE_COLORS = ['#e30613','#f5a623','#edc948','#59a14f','#00a650'];
+
+// ═══════════════════════════════════════════
+//  CHART REGISTRY
+// ═══════════════════════════════════════════
+const charts = {};
+function destroyChart(id) {
+  if (charts[id]) { try { charts[id].destroy(); } catch(e){} delete charts[id]; }
+}
+
+// ═══════════════════════════════════════════
+//  UTILS
+// ═══════════════════════════════════════════
+function fmtN(v,dec=0) {
+  if (v===null||v===undefined||isNaN(v)) return '—';
+  return (+v).toLocaleString('es-CL',{minimumFractionDigits:dec,maximumFractionDigits:dec});
+}
+function fmtPct(v,dec=1) {
+  if (v===null||v===undefined||isNaN(v)) return '—';
+  return fmtN(v,dec)+'%';
+}
+function bfClass(v) { const p=v>1?v:v*100; if(p<55)return 'good'; if(p<70)return 'warn'; return 'bad'; }
+function bfLabel(v) { const p=v>1?v:v*100; if(p<55)return 'OK'; if(p<70)return 'Alerta'; return 'Crítico'; }
+function bfDisplay(v) { const p=v>1?v:v*100; return fmtPct(p,1); }
+
+// ═══════════════════════════════════════════
+//  MOCK DATA — PUTAWAY
+// ═══════════════════════════════════════════
+function makeMockRow(fecha, hora) {
+  const base = 180 + Math.sin(hora * 0.4) * 60 + rand() * 40;
+  const reps = Math.round(18 + Math.sin(hora * 0.3) * 5 + rand() * 4);
+  const und = Math.round(base * 12);
+  const vol = und * (2.8 + rand() * 1.2);
+  const totPct = 55 + rand() * 25;
+  const areas = AREAS;
+  const shrRaw = areas.map(() => 5 + rand() * 30);
+  const shrSum = shrRaw.reduce((a,b)=>a+b,0);
+  const shrs = shrRaw.map(v => v/shrSum);
+  const undAreas = areas.map((a,i) => Math.round(und * shrs[i]));
+  const volAreas = areas.map((a,i) => undAreas[i] * (2.2 + rand() * 2));
+  const bfBase = { MZ0:0.42,MZ1:0.58,MZ2:0.67,MZ3:0.51,HS:0.73,RK:0.49,HV:0.62 };
+  const bf = {};
+  areas.forEach(a => { bf['BF_'+a] = Math.min(0.95, bfBase[a] + (rand()-0.5)*0.12); });
+  const nh1p=0.08+rand()*0.06, nh2p=0.12+rand()*0.08, nh3p=0.10+rand()*0.06;
+  const natp=0.35+rand()*0.10, ptp=0.20+rand()*0.08;
+  const plp=Math.max(0,1-nh1p-nh2p-nh3p-natp-ptp);
+  return {
+    PROCESO:'PUTAWAY', FECHA:fecha, HORA:hora,
+    TOTAL_REPS:reps,
+    N_NH1:Math.round(reps*nh1p), N_NH2:Math.round(reps*nh2p), N_NH3:Math.round(reps*nh3p),
+    N_NATIVO:Math.round(reps*natp), N_PT:Math.round(reps*ptp), N_PALANCA_EXT:Math.round(reps*plp),
+    PCT_NH1:+(nh1p*100).toFixed(1), PCT_NH2:+(nh2p*100).toFixed(1), PCT_NH3:+(nh3p*100).toFixed(1),
+    PCT_NATIVO:+(natp*100).toFixed(1), PCT_PT:+(ptp*100).toFixed(1), PCT_PALANCA_EXT:+(plp*100).toFixed(1),
+    UND_TOTAL:und, VOL_TOTAL_LITROS:+vol.toFixed(1),
+    PCT_TOTEABLE:+totPct.toFixed(1), PCT_NO_TOTEABLE:+(100-totPct).toFixed(1),
+    VOL_X_UND_TOTAL:+(vol/und).toFixed(2),
+    VOL_X_UND_TOTEABLE:+(2.5+rand()*3.0).toFixed(2),
+    VOL_X_UND_NO_TOTEABLE:+(8.0+rand()*30.0).toFixed(2),
+    VOL_MZ0:+volAreas[0].toFixed(1), VOL_MZ1:+volAreas[1].toFixed(1),
+    VOL_MZ2:+volAreas[2].toFixed(1), VOL_MZ3:+volAreas[3].toFixed(1),
+    VOL_HS:+volAreas[4].toFixed(1),  VOL_RK:+volAreas[5].toFixed(1), VOL_HV:+volAreas[6].toFixed(1),
+    UND_MZ0:undAreas[0], UND_MZ1:undAreas[1], UND_MZ2:undAreas[2], UND_MZ3:undAreas[3],
+    UND_HS:undAreas[4],  UND_RK:undAreas[5],  UND_HV:undAreas[6],
+    SHR_MZ0:+(shrs[0]*100).toFixed(1), SHR_MZ1:+(shrs[1]*100).toFixed(1),
+    SHR_MZ2:+(shrs[2]*100).toFixed(1), SHR_MZ3:+(shrs[3]*100).toFixed(1),
+    SHR_HS:+(shrs[4]*100).toFixed(1),  SHR_RK:+(shrs[5]*100).toFixed(1),
+    SHR_HV:+(shrs[6]*100).toFixed(1),  SHR_RS:1.5, SHR_OTHERS:1.0,
+    BF_MZ0:+bf.BF_MZ0.toFixed(3), BF_MZ1:+bf.BF_MZ1.toFixed(3),
+    BF_MZ2:+bf.BF_MZ2.toFixed(3), BF_MZ3:+bf.BF_MZ3.toFixed(3),
+    BF_HS:+bf.BF_HS.toFixed(3),   BF_RK:+bf.BF_RK.toFixed(3), BF_HV:+bf.BF_HV.toFixed(3)
+  };
+}
+
+// ═══════════════════════════════════════════
+//  MOCK DATA — CHECKIN
+// ═══════════════════════════════════════════
+function makeMockRowCheckin(fecha, hora) {
+  const reps = Math.round(15 + Math.sin(hora*0.3)*4 + rand()*3);
+  const uds  = Math.round(300 + Math.sin(hora*0.4)*80 + rand()*100);
+  const vol  = uds * (1.2 + rand()*0.6);
+  const totes = Math.round(40 + rand()*60);
+  const nh1p=0.10+rand()*0.06, nh2p=0.08+rand()*0.06, nh3p=0.07+rand()*0.05;
+  const natp=0.45+rand()*0.10, ptp=0.12+rand()*0.06;
+  const plp=Math.max(0,1-nh1p-nh2p-nh3p-natp-ptp);
+  const xs=15+rand()*15, s=20+rand()*15, m=25+rand()*15;
+  const l=15+rand()*12,  xl=10+rand()*10;
+  const ts=xs+s+m+l+xl;
+  return {
+    PROCESO:'CHECKIN', FECHA:fecha, HORA:hora,
+    TOTAL_REPS:reps,
+    N_NH1:Math.round(reps*nh1p), N_NH2:Math.round(reps*nh2p), N_NH3:Math.round(reps*nh3p),
+    N_NATIVO:Math.round(reps*natp), N_PT:Math.round(reps*ptp), N_PALANCA_EXT:Math.round(reps*plp),
+    PCT_NH1:+(nh1p*100).toFixed(1), PCT_NH2:+(nh2p*100).toFixed(1), PCT_NH3:+(nh3p*100).toFixed(1),
+    PCT_NATIVO:+(natp*100).toFixed(1), PCT_PT:+(ptp*100).toFixed(1), PCT_PALANCA_EXT:+(plp*100).toFixed(1),
+    UDS_CHECKIN:uds, UDS_TOTEABLE:Math.round(uds*(0.55+rand()*0.25)), UDS_NO_TOTEABLE:Math.round(uds*(0.20+rand()*0.25)), L_POR_UD_TOTEABLE:+(2.0+rand()*2.0).toFixed(3), L_POR_UD_NO_TOTEABLE:+(6.0+rand()*4.0).toFixed(3), VOL_L_TOTAL:+vol.toFixed(1),
+    L_POR_UD:+(vol/uds).toFixed(3), KG_POR_UD:+(vol/uds*0.3).toFixed(3),
+    TOTAL_TOTES:totes,
+    PCT_TOTE_XS:+(xs/ts*100).toFixed(1), PCT_TOTE_S:+(s/ts*100).toFixed(1),
+    PCT_TOTE_M:+(m/ts*100).toFixed(1),   PCT_TOTE_L:+(l/ts*100).toFixed(1),
+    PCT_TOTE_XL:+(xl/ts*100).toFixed(1)
+  };
+}
+
+// ═══════════════════════════════════════════
+//  MOCK DATA — DCI
+// ═══════════════════════════════════════════
+function makeMockRowDCI(fecha, hora) {
+  const reps = Math.round(8 + Math.sin(hora*0.3)*3 + rand()*4);
+  const uds  = Math.round(120 + Math.sin(hora*0.4)*40 + rand()*60);
+  const vol  = uds * (1.0 + rand()*0.5);
+  const totes = Math.round(20 + rand()*35);
+  const nh1p=0.10+rand()*0.05, nh2p=0.08+rand()*0.05, nh3p=0.06+rand()*0.04;
+  const natp=0.50+rand()*0.10, ptp=0.10+rand()*0.05;
+  const plp=Math.max(0,1-nh1p-nh2p-nh3p-natp-ptp);
+  const xs=16+rand()*12, s=21+rand()*12, m=24+rand()*12;
+  const l=14+rand()*10,  xl=8+rand()*8;
+  const ts=xs+s+m+l+xl;
+  return {
+    PROCESO:'DCI', FECHA:fecha, HORA:hora,
+    TOTAL_REPS:reps,
+    N_NH1:Math.round(reps*nh1p), N_NH2:Math.round(reps*nh2p), N_NH3:Math.round(reps*nh3p),
+    N_NATIVO:Math.round(reps*natp), N_PT:Math.round(reps*ptp), N_PALANCA_EXT:Math.round(reps*plp),
+    PCT_NH1:+(nh1p*100).toFixed(1), PCT_NH2:+(nh2p*100).toFixed(1), PCT_NH3:+(nh3p*100).toFixed(1),
+    PCT_NATIVO:+(natp*100).toFixed(1), PCT_PT:+(ptp*100).toFixed(1), PCT_PALANCA_EXT:+(plp*100).toFixed(1),
+    UDS_DCI:uds, UDS_TOTEABLE:Math.round(uds*(0.45+rand()*0.30)), UDS_NO_TOTEABLE:Math.round(uds*(0.20+rand()*0.30)), L_POR_UD_TOTEABLE:+(1.8+rand()*2.0).toFixed(3), L_POR_UD_NO_TOTEABLE:+(7.0+rand()*5.0).toFixed(3), VOL_L_TOTAL:+vol.toFixed(1),
+    L_POR_UD:+(vol/uds).toFixed(3), KG_POR_UD:+(vol/uds*0.28).toFixed(3),
+    TOTAL_TOTES:totes,
+    PCT_TOTE_XS:+(xs/ts*100).toFixed(1), PCT_TOTE_S:+(s/ts*100).toFixed(1),
+    PCT_TOTE_M:+(m/ts*100).toFixed(1),   PCT_TOTE_L:+(l/ts*100).toFixed(1),
+    PCT_TOTE_XL:+(xl/ts*100).toFixed(1)
+  };
+}
+
+const MOCK_DATA = (function() {
+  const rows = [];
+  const dates = ['2026-10-27','2026-10-28','2026-10-29'];
+  dates.forEach(d => {
+    for (let h = 0; h <= 23; h++) {
+      rows.push(makeMockRow(d, h));
+      rows.push(makeMockRowCheckin(d, h));
+      rows.push(makeMockRowDCI(d, h));
+    }
+  });
+  return rows;
+})();
+
+// ═══════════════════════════════════════════
+//  NORMALIZE DATA TYPES
+//  Grid devuelve todos los valores como strings.
+//  Convertir campos numéricos a number antes de usar.
+// ═══════════════════════════════════════════
+function normalizeRows(rows) {
+  return rows.map(function(r) {
+    var out = {};
+    Object.keys(r).forEach(function(k) {
+      var v = r[k];
+      // FECHA y PROCESO se mantienen como string
+      if (k === 'FECHA' || k === 'PROCESO') {
+        out[k] = v;
+      } else if (v !== null && v !== undefined && v !== '' && !isNaN(+v)) {
+        out[k] = +v;  // convierte "42" → 42, "0.65" → 0.65
+      } else {
+        out[k] = v;
+      }
+    });
+    return out;
+  });
+}
+
+// ═══════════════════════════════════════════
+//  INIT DASHBOARD
+// ═══════════════════════════════════════════
+function initDashboard(rows) {
+  ALL_DATA = normalizeRows(rows || []);
+  document.getElementById('loadingOverlay').style.display = 'none';
+  document.getElementById('updateTimestamp').textContent =
+    new Date().toLocaleString('es-CL', {timeZone:'America/Santiago'});
+
+  const today = new Date().toLocaleDateString('sv', {timeZone:'America/Santiago'});
+  const allDates = [...new Set(ALL_DATA.map(r => r.FECHA))].sort();
+  if (allDates.includes(today)) selectedDate = today;
+  else selectedDate = allDates[allDates.length - 1] || today;
+
+  const dp = document.getElementById('datePicker');
+  dp.value = selectedDate;
+  if (allDates.length > 0) { dp.min = allDates[0]; dp.max = allDates[allDates.length-1]; }
+
+  renderAll();
+}
+
+// ═══════════════════════════════════════════
+//  RENDER ALL
+// ═══════════════════════════════════════════
+function applyHourFilter(rows) {
+  if (hourFrom === null || hourTo === null) return rows;
+  return rows.filter(r => {
+    const h = +r.HORA;
+    if (hourFrom <= hourTo) return h >= hourFrom && h <= hourTo;
+    else return h >= hourFrom || h <= hourTo;
+  });
+}
+function renderAll() {
+  let dateRows = ALL_DATA.filter(r => r.FECHA === selectedDate).sort((a,b) => a.HORA - b.HORA);
+  dateRows = applyHourFilter(dateRows);
+  const puRows  = dateRows.filter(r => !r.PROCESO || r.PROCESO === 'PUTAWAY');
+  const ciRows  = dateRows.filter(r => r.PROCESO === 'CHECKIN');
+  const dciRows = dateRows.filter(r => r.PROCESO === 'DCI');
+
+  renderKPIs(puRows);
+  renderVolumetria(puRows, ciRows, dciRows);
+  renderBinfullness(puRows);
+  renderTipoReps(puRows, ciRows, dciRows);
+  renderShare(puRows, ciRows, dciRows);
+  renderKgBins('ci',  ciRows);
+  renderKgBins('dci', dciRows);
+  renderTotefullness(ciRows, dciRows);
+  renderDetalle(puRows, ciRows, dciRows);
+}
+
+// ═══════════════════════════════════════════
+//  KPIs (PUTAWAY)
+// ═══════════════════════════════════════════
+function renderKPIs(rows) {
+  if (!rows.length) {
+    ['kpi-und','kpi-vol','kpi-lxu','kpi-tot','kpi-reps'].forEach(id => {
+      document.getElementById(id).textContent = '—';
+    });
+    return;
+  }
+  const totUnd = rows.reduce((s,r) => s+(r.UND_TOTAL||0), 0);
+  const totVol = rows.reduce((s,r) => s+(r.VOL_TOTAL_LITROS||0), 0);
+  const lxu = totUnd > 0 ? totVol/totUnd : 0;
+  const totPct = totUnd > 0
+    ? rows.reduce((s,r) => s+(r.PCT_TOTEABLE||0)*(r.UND_TOTAL||0), 0) / totUnd : 0;
+  const maxReps = Math.max(...rows.map(r => r.TOTAL_REPS||0));
+  document.getElementById('kpi-und').textContent = fmtN(totUnd);
+  document.getElementById('kpi-und-sub').textContent = rows.length+' horas registradas';
+  document.getElementById('kpi-vol').textContent = fmtN(totVol,0)+' L';
+  document.getElementById('kpi-lxu').textContent = fmtN(lxu,2);
+  document.getElementById('kpi-tot').textContent = fmtPct(totPct,1);
+  document.getElementById('kpi-reps').textContent = fmtN(maxReps);
+}
+
+// ═══════════════════════════════════════════
+//  TAB 1: VOLUMETRÍA
+// ═══════════════════════════════════════════
+function renderVolumetria(puRows, ciRows, dciRows) {
+  // --- PUTAWAY ---
+  const puNd = document.getElementById('pu-vol-nodata');
+  const puCt = document.getElementById('pu-vol-content');
+  if (!puRows.length) { puNd.style.display='flex'; puCt.style.display='none'; }
+  else {
+    puNd.style.display='none'; puCt.style.display='block';
+    const horas = puRows.map(r => 'H'+String(r.HORA).padStart(2,'0'));
+    destroyChart('volStack_PU'); destroyChart('lxu_PU');
+    charts['volStack_PU'] = new Chart(document.getElementById('chartVolStack_PU').getContext('2d'), {
+      type:'bar',
+      data:{
+        labels:horas,
+        datasets:AREAS.map(a => ({
+          label:a, data:puRows.map(r=>r['UND_'+a]||0),
+          backgroundColor:AREA_COLORS[a]+'CC', borderColor:AREA_COLORS[a], borderWidth:1, stack:'s1'
+        }))
+      },
+      options:{
+        responsive:true, maintainAspectRatio:false, animation:false,
+        plugins:{legend:{position:'top',labels:{usePointStyle:true,padding:14,font:{size:11}}}},
+        scales:{x:{stacked:true,grid:{display:false}},y:{stacked:true,ticks:{callback:v=>fmtN(v)}}},
+        interaction:{mode:'index',intersect:false}
+      }
+    });
+    charts['lxu_PU'] = new Chart(document.getElementById('chartLxU_PU').getContext('2d'), {
+      type:'line',
+      data:{
+        labels:horas,
+        datasets:[
+          {label:'Toteable (L/ud)',    data:puRows.map(r=>r.VOL_X_UND_TOTEABLE||0),
+           borderColor:'#3483FA', backgroundColor:'rgba(52,131,250,0.08)',
+           borderWidth:2, fill:false, tension:0.35, pointRadius:3},
+          {label:'No Toteable (L/ud)', data:puRows.map(r=>r.VOL_X_UND_NO_TOTEABLE||0),
+           borderColor:'#00a650', backgroundColor:'rgba(0,166,80,0.08)',
+           borderWidth:2, fill:false, tension:0.35, pointRadius:3}
+        ]
+      },
+      options:{
+        responsive:true, maintainAspectRatio:false, animation:false,
+        plugins:{legend:{display:false},
+          tooltip:{callbacks:{label:c=>' '+c.dataset.label+': '+fmtN(c.parsed.y,2)+' L/ud'}}},
+        scales:{x:{grid:{display:false}},y:{beginAtZero:false,ticks:{callback:v=>v.toFixed(2)+'L'}}}
+      }
+    });
+    const byVol = AREAS.map(a => ({
+      area:a, vol:puRows.reduce((s,r)=>s+(r['VOL_'+a]||0),0),
+      und:puRows.reduce((s,r)=>s+(r['UND_'+a]||0),0)
+    })).sort((a,b)=>b.vol-a.vol);
+    document.getElementById('topAreasRow_PU').innerHTML = byVol.slice(0,3).map((item,i)=>`
+      <div class="top-area-card">
+        <div class="top-area-rank ${i===1?'r2':i===2?'r3':''}">${i+1}</div>
+        <div>
+          <div class="top-area-name">${item.area}</div>
+          <div class="top-area-val">${fmtN(item.vol,0)} L · ${fmtN(item.und)} und</div>
+        </div>
+        <div style="margin-left:auto;width:12px;height:32px;background:${AREA_COLORS[item.area]};border-radius:3px"></div>
+      </div>`).join('');
+  }
+
+  // --- CHECKIN ---
+  renderVolCI('ci', ciRows, 'CI', 'UDS_CHECKIN', 'Uds Chequeado', '#3483FA');
+
+
+  // --- DCI ---
+  renderVolCI('dci', dciRows, 'DCI', 'UDS_DCI', 'Uds Recepción Rápida', '#00a650');
+
+}
+
+function renderVolCI(prefix, rows, suffix, udsField, udsLabel, color) {
+  const nd = document.getElementById(prefix+'-vol-nodata');
+  const ct = document.getElementById(prefix+'-vol-content');
+  if (!rows.length) { nd.style.display='flex'; ct.style.display='none'; return; }
+  nd.style.display='none'; ct.style.display='block';
+  const horas = rows.map(r => 'H'+String(r.HORA).padStart(2,'0'));
+  destroyChart('volStack_'+suffix); destroyChart('lxu_'+suffix);
+
+  charts['volStack_'+suffix] = new Chart(document.getElementById('chartVolStack_'+suffix).getContext('2d'), {
+    type:'bar',
+    data:{
+      labels:horas,
+      datasets:[
+        {label:udsLabel, data:rows.map(r=>r[udsField]||0),
+         backgroundColor:color+'CC', borderColor:color, borderWidth:1},
+        {label:'Uds Toteables', data:rows.map(r=>r.UDS_TOTEABLE||0),
+         type:'line', borderColor:'#f5a623', backgroundColor:'rgba(245,166,35,0)',
+         borderWidth:2, fill:false, tension:0.35, pointRadius:3, yAxisID:'y2'}
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false, animation:false,
+      plugins:{legend:{position:'top',labels:{usePointStyle:true,padding:14,font:{size:11}}}},
+      scales:{
+        x:{grid:{display:false}},
+        y:{ticks:{callback:v=>fmtN(v)},beginAtZero:true},
+        y2:{position:'right',grid:{display:false},ticks:{callback:v=>fmtN(v)},beginAtZero:true}
+      },
+      interaction:{mode:'index',intersect:false}
+    }
+  });
+
+  charts['lxu_'+suffix] = new Chart(document.getElementById('chartLxU_'+suffix).getContext('2d'), {
+    type:'line',
+    data:{
+      labels:horas,
+      datasets:[
+        {label:'Toteable (L/ud)',    data:rows.map(r=>r.L_POR_UD_TOTEABLE||0),
+         borderColor:'#3483FA', backgroundColor:'rgba(52,131,250,0.08)',
+         borderWidth:2, fill:false, tension:0.35, pointRadius:3},
+        {label:'No Toteable (L/ud)', data:rows.map(r=>r.L_POR_UD_NO_TOTEABLE||0),
+         borderColor:'#00a650', backgroundColor:'rgba(0,166,80,0.08)',
+         borderWidth:2, fill:false, tension:0.35, pointRadius:3}
+      ]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false, animation:false,
+      plugins:{legend:{display:false},
+        tooltip:{callbacks:{label:c=>' '+c.dataset.label+': '+fmtN(c.parsed.y,2)+' L/ud'}}},
+      scales:{x:{grid:{display:false}},y:{beginAtZero:false,ticks:{callback:v=>v.toFixed(2)+'L'}}}
+    }
+  });
+
+  // Kg/ud — Toteable vs No Toteable
+  const kgCvs = document.getElementById('chartKgU_'+suffix);
+  if (kgCvs) {
+    destroyChart('kgu_'+suffix);
+    charts['kgu_'+suffix] = new Chart(kgCvs.getContext('2d'), {
+      type:'line',
+      data:{
+        labels:horas,
+        datasets:[
+          {label:'Toteable (Kg/ud)',    data:rows.map(r=>r.KG_POR_UD_TOTEABLE||0),
+           borderColor:'#f5a623', backgroundColor:'rgba(245,166,35,0.08)',
+           borderWidth:2, fill:false, tension:0.35, pointRadius:3},
+          {label:'No Toteable (Kg/ud)', data:rows.map(r=>r.KG_POR_UD_NO_TOTEABLE||0),
+           borderColor:'#e02020', backgroundColor:'rgba(224,32,32,0.08)',
+           borderWidth:2, fill:false, tension:0.35, pointRadius:3}
+        ]
+      },
+      options:{
+        responsive:true, maintainAspectRatio:false, animation:false,
+        plugins:{legend:{display:false},
+          tooltip:{callbacks:{label:c=>' '+c.dataset.label+': '+fmtN(c.parsed.y,3)+' Kg/ud'}}},
+        scales:{x:{grid:{display:false}},y:{beginAtZero:false,ticks:{callback:v=>v.toFixed(2)+'Kg'}}}
+      }
+    });
+  }
+
+  const byUds = rows.map(r=>({hora:r.HORA+'h', val:r[udsField]||0})).sort((a,b)=>b.val-a.val);
+  document.getElementById('topAreasRow_'+suffix).innerHTML = byUds.slice(0,3).map((item,i)=>`
+    <div class="top-area-card">
+      <div class="top-area-rank ${i===1?'r2':i===2?'r3':''}">${i+1}</div>
+      <div>
+        <div class="top-area-name">Hora ${item.hora}</div>
+        <div class="top-area-val">${fmtN(item.val)} uds</div>
+      </div>
+      <div style="margin-left:auto;width:12px;height:32px;background:${color};border-radius:3px;opacity:0.7"></div>
+    </div>`).join('');
+}
+
+// ═══════════════════════════════════════════
+//  TOTEABILIDAD — 2 gráficos: Unidades + Vol Ponderada
+// ═══════════════════════════════════════════
+function makeToteBar(canvasId, keyId, labels, ds1, ds2, tooltipSuffix) {
+  destroyChart(keyId);
+  const cvs = document.getElementById(canvasId);
+  if (!cvs) return;
+  charts[keyId] = new Chart(cvs.getContext('2d'), {
+    type:'bar',
+    data:{ labels, datasets:[
+      {label:ds1.label, data:ds1.data, backgroundColor:ds1.color+'BF', borderRadius:3, borderWidth:0},
+      {label:ds2.label, data:ds2.data, backgroundColor:ds2.color+'BF', borderRadius:3, borderWidth:0}
+    ]},
+    options:{
+      responsive:true, maintainAspectRatio:false, animation:false,
+      plugins:{
+        legend:{display:false},
+        tooltip:{callbacks:{label:c=>' '+c.dataset.label+': '+fmtN(c.parsed.y,2)+tooltipSuffix}}
+      },
+      scales:{
+        x:{grid:{display:false}, ticks:{color:'rgba(0,0,0,0.4)',font:{size:10}}},
+        y:{beginAtZero:true, grid:{color:'rgba(0,0,0,0.04)'},
+           ticks:{color:'rgba(0,0,0,0.45)',font:{size:11},
+                  callback:v=>v>=1000?(v/1000).toFixed(0)+'K':v}}
+      },
+      interaction:{mode:'index',intersect:false}
+    }
+  });
+}
+function renderToteVol(suffix, rows) {
+  if (!rows || !rows.length) return;
+  const labels = rows.map(r => 'H'+String(r.hora).padStart(2,'0'));
+  const GREEN='#00a650', BLUE='#3483FA';
+
+  // Unidades Toteable vs No Toteable por hora
+  makeToteBar(
+    'chartToteUds_'+suffix, 'toteUds_'+suffix, labels,
+    {label:'Toteable',    data:rows.map(r=>r.uds_tot), color:GREEN},
+    {label:'No Toteable', data:rows.map(r=>r.uds_no),  color:BLUE},
+    ' un'
+  );
+}
+
+// ═══════════════════════════════════════════
+//  TAB 2: BINFULLNESS (solo PUTAWAY — igual al original)
+// ═══════════════════════════════════════════
+function renderBinfullness(rows) {
+  const nd = document.getElementById('bf-nodata');
+  const ct = document.getElementById('bf-content');
+  if (!rows.length) { nd.style.display='flex'; ct.style.display='none'; return; }
+  nd.style.display='none'; ct.style.display='block';
+
+  const lastRow = rows[rows.length-1];
+  const bfVals = BF_AREAS.map(a => ({ area:a, val:lastRow['BF_'+a]||0 }));
+
+  document.getElementById('bfCardsRow').className = 'bf-grid';
+  document.getElementById('bfCardsRow').innerHTML = bfVals.map(item => {
+    const cls=bfClass(item.val), pct=item.val>1?item.val:item.val*100;
+    return `<div class="bf-card ${cls}">
+      <div class="bf-area">${item.area}</div>
+      <div class="bf-pct ${cls}">${fmtPct(pct,1)}</div>
+      <span class="bf-badge ${cls}">${bfLabel(item.val)}</span>
+    </div>`;
+  }).join('');
+
+  destroyChart('bf');
+  const pcts = bfVals.map(v=>+(v.val>1?v.val:v.val*100).toFixed(1));
+  charts['bf'] = new Chart(document.getElementById('chartBF').getContext('2d'), {
+    type:'bar',
+    data:{
+      labels:bfVals.map(v=>v.area),
+      datasets:[{label:'BF%',data:pcts,
+        backgroundColor:pcts.map(p=>p<55?'rgba(0,166,80,0.75)':p<70?'rgba(245,166,35,0.75)':'rgba(227,6,19,0.75)'),
+        borderColor:pcts.map(p=>p<55?'#00a650':p<70?'#f5a623':'#e30613'),
+        borderWidth:1,borderRadius:4}]
+    },
+    options:{
+      indexAxis:'y', responsive:true, maintainAspectRatio:false, animation:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>fmtPct(c.parsed.x,1)}}},
+      scales:{x:{min:0,max:100,ticks:{callback:v=>v+'%'},grid:{color:'rgba(0,0,0,0.05)'}},y:{grid:{display:false}}}
+    }
+  });
+
+  const horas = rows.map(r=>'H'+String(r.HORA).padStart(2,'0'));
+  document.getElementById('bfSparklines').className = 'bf-sparklines';
+  document.getElementById('bfSparklines').innerHTML = BF_AREAS.map(a=>`
+    <div class="bf-sparkline-box"><h5>${a}</h5><canvas id="bfSpark_${a}"></canvas></div>`).join('');
+
+  BF_AREAS.forEach(a => {
+    destroyChart('bfSp_'+a);
+    const vals = rows.map(r=>+((r['BF_'+a]||0)>1?(r['BF_'+a]):(r['BF_'+a]*100)).toFixed(1));
+    const avgV = vals.reduce((s,v)=>s+v,0)/vals.length;
+    const color = avgV<55?'#00a650':avgV<70?'#f5a623':'#e30613';
+    const sCvs = document.getElementById('bfSpark_'+a);
+    if (!sCvs) return;
+    charts['bfSp_'+a] = new Chart(sCvs.getContext('2d'),{
+      type:'line',
+      data:{labels:horas,datasets:[{data:vals,borderColor:color,backgroundColor:color+'25',
+        borderWidth:2,fill:true,tension:0.3,pointRadius:1}]},
+      options:{
+        responsive:true,maintainAspectRatio:false,animation:false,
+        plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>fmtPct(c.parsed.y,1)}}},
+        scales:{x:{display:false},y:{min:0,max:100,display:false}}
+      }
+    });
+  });
+}
+
+// ═══════════════════════════════════════════
+//  TOTEFULLNESS (Binfullness tab – sección inferior)
+// ═══════════════════════════════════════════
+function renderTotefullness(ciRows, dciRows) {
+  const TF_METRICS = [
+    { key:'PCT_VOL_FULL_AVG',    label:'Vol %',    color:'#3483fa' },
+    { key:'PCT_PESO_FULL_AVG',   label:'Peso %',   color:'#f5a623' },
+    { key:'PCT_SATURA_FULL_AVG', label:'Satura %', color:'#9b59b6' }
+  ];
+
+  // Promedia solo las horas con data real (non-null, non-zero)
+  function dayAvg(rows, key) {
+    const vals = rows.map(r => (r[key] != null ? +r[key] : null)).filter(v => v !== null && v > 0);
+    return vals.length ? vals.reduce((s,v) => s+v, 0) / vals.length : null;
+  }
+
+  // isSatura: umbral diferente (≥70% verde; ≥35% amarillo; <35% rojo)
+  // Vol/Peso:  >60% verde; ≥35% amarillo; <35% rojo
+  function tfCard(avg, metric, isSatura) {
+    const pct = avg !== null ? avg.toFixed(1) + '%' : '—';
+    let clr;
+    if (avg === null) {
+      clr = 'var(--text2)';
+    } else if (isSatura) {
+      clr = avg >= 70 ? '#00a650' : avg >= 35 ? '#f5a623' : '#e30613';
+    } else {
+      clr = avg > 60  ? '#00a650' : avg >= 35 ? '#f5a623' : '#e30613';
+    }
+    const bar = Math.min(avg || 0, 100);
+    return `<div style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px 12px;text-align:center">
+      <div style="font-size:11px;color:var(--text2);margin-bottom:4px">${metric.label}</div>
+      <div style="font-size:22px;font-weight:700;color:${clr}">${pct}</div>
+      <div style="width:100%;height:4px;margin-top:6px;border-radius:2px;background:#eee">
+        <div style="height:4px;width:${bar}%;border-radius:2px;background:${clr}"></div>
+      </div>
+    </div>`;
+  }
+
+  document.getElementById('tfCardsCI').innerHTML  =
+    TF_METRICS.map(m => tfCard(dayAvg(ciRows,  m.key), m, m.key === 'PCT_SATURA_FULL_AVG')).join('');
+  document.getElementById('tfCardsDCI').innerHTML =
+    TF_METRICS.map(m => tfCard(dayAvg(dciRows, m.key), m, m.key === 'PCT_SATURA_FULL_AVG')).join('');
+
+  // Gráfico hora a hora — los 3 métricas para CI y DCI (sin target)
+  const horaSet = new Set([...ciRows.map(r=>r.HORA), ...dciRows.map(r=>r.HORA)]);
+  const horas   = [...horaSet].sort((a,b) => a-b);
+  const labels  = horas.map(h => 'H' + String(h).padStart(2,'0'));
+  const ciMap   = Object.fromEntries(ciRows.map(r  => [r.HORA, r]));
+  const dciMap  = Object.fromEntries(dciRows.map(r => [r.HORA, r]));
+
+  const mkSeries = (map, key, label, color, dash) => ({
+    label,
+    data: horas.map(h => {
+      const r = map[h];
+      return (r && r[key] != null && r[key] > 0) ? +r[key] : null;
+    }),
+    borderColor: color,
+    backgroundColor: color + '18',
+    borderWidth: 2,
+    borderDash: dash || [],
+    tension: 0.3,
+    fill: false,
+    pointRadius: 3,
+    pointHoverRadius: 5,
+    spanGaps: true
+  });
+
+  destroyChart('tfHora');
+  const cvs = document.getElementById('chartTFHora');
+  if (!cvs) return;
+  charts['tfHora'] = new Chart(cvs.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        mkSeries(ciMap,  'PCT_SATURA_FULL_AVG', 'Chequeado Saturafull',  '#3483fa'),
+        mkSeries(dciMap, 'PCT_SATURA_FULL_AVG', 'Rec. Rápida Saturafull', '#00a650'),
+        mkSeries(ciMap,  'PCT_VOL_FULL_AVG',    'Chequeado Vol',         '#3483fa', [4,3]),
+        mkSeries(dciMap, 'PCT_VOL_FULL_AVG',    'Rec. Rápida Vol',        '#00a650', [4,3]),
+        mkSeries(ciMap,  'PCT_PESO_FULL_AVG',   'Chequeado Peso',        '#f5a623', [2,2]),
+        mkSeries(dciMap, 'PCT_PESO_FULL_AVG',   'Rec. Rápida Peso',       '#e8a000', [2,2])
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: {
+        legend: { position:'top', labels:{ boxWidth:10, font:{ size:10 }, padding:10 } },
+        tooltip: { callbacks: { label: c => c.dataset.label + ': ' +
+          (c.parsed.y !== null ? c.parsed.y.toFixed(1)+'%' : '—') } }
+      },
+      scales: {
+        y: {
+          min: 0,
+          ticks: { callback: v => v+'%', font:{ size:11 } },
+          grid: { color:'rgba(0,0,0,0.05)' }
+        },
+        x: { grid:{ display:false }, ticks:{ font:{ size:10 } } }
+      }
+    }
+  });
+}
+
+// ═══════════════════════════════════════════
+//  TAB 3: TIPO REPS (3 procesos)
+// ═══════════════════════════════════════════
+function renderTipoReps(puRows, ciRows, dciRows) {
+  renderRepsPanel('PU', puRows, 'pu');
+  renderRepsPanel('CI', ciRows, 'ci');
+  renderRepsPanel('DCI', dciRows, 'dci');
+}
+
+function renderRepsPanel(suffix, rows, prefix) {
+  const nd = document.getElementById(prefix+'-reps-nodata');
+  const ct = document.getElementById(prefix+'-reps-content');
+  if (!rows.length) { nd.style.display='flex'; ct.style.display='none'; return; }
+  nd.style.display='none'; ct.style.display='block';
+
+  const LABELS  = ['NH1','NH2','NH3','Nativo','PT','Palanca'];
+  const FIELDS  = ['N_NH1','N_NH2','N_NH3','N_NATIVO','N_PT','N_PALANCA_EXT'];
+  const COLORS  = ['#e15759','#f28e2b','#edc948','#59a14f','#4e79a7','#b07aa1'];
+  const CLASSES = ['nh1','nh2','nh3','nativo','pt','palanca'];
+
+  // Usamos columnas _DIA (COUNT DISTINCT por día) cuando están disponibles.
+  // Si el SQL aún no las tiene, fallback a MAX por hora (aproximación).
+  const DIA_FIELDS = ['N_NH1_DIA','N_NH2_DIA','N_NH3_DIA','N_NATIVO_DIA','N_PT_DIA','N_PALANCA_EXT_DIA'];
+  const PCT_DIA_FIELDS = ['PCT_NH1_DIA','PCT_NH2_DIA','PCT_NH3_DIA','PCT_NATIVO_DIA','PCT_PT_DIA','PCT_PALANCA_EXT_DIA'];
+  const firstRow = rows[0];
+  const hasDia = firstRow &&
+    firstRow['N_NH1_DIA'] !== undefined &&
+    firstRow['N_NH1_DIA'] !== null &&
+    firstRow['N_NH1_DIA'] !== '';
+  const totals = hasDia
+    ? DIA_FIELDS.map(f => +(firstRow[f] || 0))
+    : FIELDS.map(f => Math.max(...rows.map(r => r[f]||0)));
+  const grand = totals.reduce((a,b)=>a+b,0) || 1;
+  const pcts = hasDia
+    ? PCT_DIA_FIELDS.map(f => +(firstRow[f] || 0))
+    : totals.map(t => t/grand*100);
+
+  document.getElementById('repsStatRow_'+suffix).innerHTML = LABELS.map((lbl,i)=>`
+    <div class="rep-stat-card ${CLASSES[i]}">
+      <div class="rep-stat-label">${lbl}</div>
+      <div class="rep-stat-val" style="color:${COLORS[i]}">${fmtN(totals[i])}</div>
+      <div class="rep-stat-pct">${fmtPct(pcts[i],1)}</div>
+    </div>`).join('');
+
+  const horas = rows.map(r=>'H'+String(r.HORA).padStart(2,'0'));
+  destroyChart('repsStack_'+suffix);
+  charts['repsStack_'+suffix] = new Chart(document.getElementById('chartRepsStack_'+suffix).getContext('2d'), {
+    type:'bar',
+    data:{labels:horas,datasets:LABELS.map((lbl,i)=>({
+      label:lbl, data:rows.map(r=>r[FIELDS[i]]||0),
+      backgroundColor:COLORS[i]+'CC', borderColor:COLORS[i], borderWidth:1, stack:'s1'
+    }))},
+    options:{
+      responsive:true,maintainAspectRatio:false,animation:false,
+      plugins:{legend:{position:'top',labels:{usePointStyle:true,padding:14,font:{size:11}}}},
+      scales:{x:{stacked:true,grid:{display:false}},y:{stacked:true}},
+      interaction:{mode:'index',intersect:false}
+    }
+  });
+
+  destroyChart('repsDonut_'+suffix);
+  charts['repsDonut_'+suffix] = new Chart(document.getElementById('chartRepsDonut_'+suffix).getContext('2d'), {
+    type:'doughnut',
+    data:{labels:LABELS,datasets:[{data:totals,backgroundColor:COLORS.map(c=>c+'CC'),borderColor:'#fff',borderWidth:2}]},
+    options:{
+      responsive:true,maintainAspectRatio:false,animation:false,cutout:'58%',
+      plugins:{
+        legend:{position:'right',labels:{usePointStyle:true,padding:12,font:{size:12}}},
+        tooltip:{callbacks:{label:c=>{
+          const tot=c.dataset.data.reduce((a,b)=>a+b,0);
+          return ` ${c.label}: ${fmtN(c.parsed)} (${(c.parsed/tot*100).toFixed(1)}%)`;
+        }}}
+      }
+    }
+  });
+}
+
+// ═══════════════════════════════════════════
+//  TAB 4: SHARE (PUTAWAY área + CHECKIN totes + DCI totes)
+// ═══════════════════════════════════════════
+function renderShare(puRows, ciRows, dciRows) {
+  // --- PUTAWAY share por área ---
+  const puNd = document.getElementById('pu-shr-nodata');
+  const puCt = document.getElementById('pu-shr-content');
+  if (!puRows.length) { puNd.style.display='flex'; puCt.style.display='none'; }
+  else {
+    puNd.style.display='none'; puCt.style.display='block';
+    const SHR_KEYS   = AREAS.map(a=>'SHR_'+a).concat(['SHR_RS','SHR_OTHERS']);
+    const SHR_LABELS = AREAS.concat(['RS','Others']);
+    const SHR_COLORS = AREAS.map(a=>AREA_COLORS[a]).concat(['#aec6cf','#b5b5b5']);
+    const totUnd = puRows.reduce((s,r)=>s+(r.UND_TOTAL||0),0);
+    const avgShrs = SHR_KEYS.map(k => totUnd>0 ? puRows.reduce((s,r)=>s+(r[k]||0)*(r.UND_TOTAL||0),0)/totUnd : 0);
+
+    destroyChart('shrDonut');
+    charts['shrDonut'] = new Chart(document.getElementById('chartShrDonut').getContext('2d'), {
+      type:'doughnut',
+      data:{labels:SHR_LABELS,datasets:[{data:avgShrs,backgroundColor:SHR_COLORS.map(c=>c+'CC'),borderColor:'#fff',borderWidth:2}]},
+      options:{
+        responsive:true,maintainAspectRatio:false,animation:false,cutout:'55%',
+        plugins:{
+          legend:{position:'right',labels:{usePointStyle:true,padding:10,font:{size:11}}},
+          tooltip:{callbacks:{label:c=>{
+            const tot=c.dataset.data.reduce((a,b)=>a+b,0);
+            const p=tot>0?(c.parsed/tot*100).toFixed(1):'0.0';
+            return ` ${c.label}: ${c.parsed.toFixed(1)}% (rel: ${p}%)`;
+          }}}
+        }
+      }
+    });
+
+    const horas = puRows.map(r=>'H'+String(r.HORA).padStart(2,'0'));
+    destroyChart('shrStack');
+    charts['shrStack'] = new Chart(document.getElementById('chartShrStack').getContext('2d'), {
+      type:'bar',
+      data:{labels:horas,datasets:SHR_LABELS.map((lbl,i)=>({
+        label:lbl, data:puRows.map(r=>r[SHR_KEYS[i]]||0),
+        backgroundColor:SHR_COLORS[i]+'CC', borderColor:SHR_COLORS[i], borderWidth:1, stack:'s1'
+      }))},
+      options:{
+        responsive:true,maintainAspectRatio:false,animation:false,
+        plugins:{legend:{position:'top',labels:{usePointStyle:true,padding:12,font:{size:11}}}},
+        scales:{x:{stacked:true,grid:{display:false}},y:{stacked:true,ticks:{callback:v=>v+'%'}}},
+        interaction:{mode:'index',intersect:false}
+      }
+    });
+
+    const tableData = SHR_LABELS.map((lbl,i)=>{
+      const und = puRows.reduce((s,r)=>s+(r['UND_'+AREAS[i]]||0),0);
+      const vol = puRows.reduce((s,r)=>s+(r['VOL_'+AREAS[i]]||0),0);
+      return {lbl, shr:avgShrs[i], und, lxu:und>0?vol/und:0, color:SHR_COLORS[i]};
+    });
+    const maxShr = Math.max(...tableData.map(d=>d.shr));
+    document.getElementById('shareTableBody').innerHTML = tableData.map(d=>`
+      <tr>
+        <td style="font-weight:700">
+          <span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${d.color};margin-right:8px;vertical-align:middle"></span>${d.lbl}
+        </td>
+        <td>${fmtN(d.und)}</td>
+        <td style="font-weight:700">${fmtPct(d.shr,1)}</td>
+        <td><div class="shr-bar-wrap"><div class="shr-bar" style="width:${maxShr>0?d.shr/maxShr*100:0}%;background:${d.color}"></div></div></td>
+        <td>${d.lxu>0?fmtN(d.lxu,2)+' L':'—'}</td>
+      </tr>`).join('');
+  }
+
+  // --- CHECKIN totes ---
+  renderTotePanel('ci', ciRows, 'CI', '#3483FA');
+  // --- DCI totes ---
+  renderTotePanel('dci', dciRows, 'DCI', '#00a650');
+}
+
+function renderTotePanel(prefix, rows, suffix, color) {
+  const nd = document.getElementById(prefix+'-shr-nodata');
+  const ct = document.getElementById(prefix+'-shr-content');
+  if (!rows.length) { nd.style.display='flex'; ct.style.display='none'; return; }
+  nd.style.display='none'; ct.style.display='block';
+
+  const horas = rows.map(r => 'H'+String(r.HORA).padStart(2,'0'));
+
+  // Gráfico 1: totes por tipo por hora (apilado)
+  // Estimamos N totes por tamaño = TOTAL_TOTES * PCT_TOTE_X / 100
+  destroyChart(prefix+'ToteHora');
+  const cvs1 = document.getElementById('chart'+suffix+'ToteHora');
+  if (cvs1) {
+    charts[prefix+'ToteHora'] = new Chart(cvs1.getContext('2d'), {
+      type:'bar',
+      data:{
+        labels: horas,
+        datasets: TOTE_SIZES.map((t,i) => ({
+          label: t,
+          data:  rows.map(r => Math.round((r.TOTAL_TOTES||0) * (r['PCT_TOTE_'+t]||0) / 100)),
+          backgroundColor: TOTE_COLORS[i]+'CC',
+          borderWidth:0, borderRadius:2
+        }))
+      },
+      options:{
+        responsive:true, maintainAspectRatio:false, animation:false,
+        plugins:{
+          legend:{position:'top',labels:{usePointStyle:true,padding:10,font:{size:10}}},
+          tooltip:{mode:'index',intersect:false}
+        },
+        scales:{
+          x:{stacked:true, grid:{display:false}},
+          y:{stacked:true, beginAtZero:true, ticks:{callback:v=>fmtN(v)+' totes'}}
+        }
+      }
+    });
+  }
+
+  // Gráfico 2: % del total del día por tipo (barra horizontal)
+  const totalTotes = rows.reduce((s,r) => s+(r.TOTAL_TOTES||0), 0);
+  const sizeTotals = TOTE_SIZES.map(t =>
+    rows.reduce((s,r) => s + Math.round((r.TOTAL_TOTES||0) * (r['PCT_TOTE_'+t]||0) / 100), 0)
+  );
+  const sizePcts = sizeTotals.map(n => totalTotes > 0 ? +(n/totalTotes*100).toFixed(1) : 0);
+
+  destroyChart(prefix+'ToteDia');
+  const cvs2 = document.getElementById('chart'+suffix+'ToteDia');
+  if (cvs2) {
+    charts[prefix+'ToteDia'] = new Chart(cvs2.getContext('2d'), {
+      type:'bar',
+      data:{
+        labels: TOTE_SIZES,
+        datasets:[{
+          label:'% totes del día',
+          data: sizePcts,
+          backgroundColor: TOTE_COLORS.map(c=>c+'CC'),
+          borderWidth:0, borderRadius:4
+        }]
+      },
+      options:{
+        indexAxis:'y', responsive:true, maintainAspectRatio:false, animation:false,
+        plugins:{
+          legend:{display:false},
+          tooltip:{callbacks:{label:c=>fmtPct(c.parsed.x,1)+' ('+fmtN(sizeTotals[c.dataIndex])+' totes)'}}
+        },
+        scales:{
+          x:{min:0,max:100,ticks:{callback:v=>v+'%'}, grid:{color:'rgba(0,0,0,0.05)'}},
+          y:{grid:{display:false}}
+        }
+      }
+    });
+  }
+}
+
+// ═══════════════════════════════════════════
+//  SHARE DE KILO — bins de peso por tote
+// ═══════════════════════════════════════════
+const KG_BINS     = ['0_2','2_4','4_6','6_8','8_10','10_12','12_16','16_MAS'];
+const KG_BIN_LBL  = ['0-2','2-4','4-6','6-8','8-10','10-12','12-16','16+'];
+const KG_BIN_CLR  = ['#3483FA','#00a650','#f5a623','#e02020','#9b59b6','#1abc9c','#e67e22','#c0392b'];
+
+function renderKgBins(prefix, rows) {
+  const nd = document.getElementById(prefix+'-kg-nodata');
+  const ct = document.getElementById(prefix+'-kg-content');
+  if (!rows.length) { if(nd) nd.style.display='flex'; if(ct) ct.style.display='none'; return; }
+  if(nd) nd.style.display='none'; if(ct) ct.style.display='block';
+
+  const horas  = rows.map(r => 'H'+String(r.HORA).padStart(2,'0'));
+
+  // Gráfico 1: totes por hora por bin (apilado)
+  destroyChart(prefix+'KgHora');
+  const cvs1 = document.getElementById('chart'+prefix.toUpperCase()+'KgHora');
+  if (cvs1) {
+    charts[prefix+'KgHora'] = new Chart(cvs1.getContext('2d'), {
+      type:'bar',
+      data:{
+        labels: horas,
+        datasets: KG_BINS.map((b,i) => ({
+          label: KG_BIN_LBL[i]+' kg',
+          data:  rows.map(r => r['N_TOTES_'+b]||0),
+          backgroundColor: KG_BIN_CLR[i]+'CC',
+          borderWidth:0, borderRadius:2
+        }))
+      },
+      options:{
+        responsive:true, maintainAspectRatio:false, animation:false,
+        plugins:{
+          legend:{position:'top',labels:{usePointStyle:true,padding:10,font:{size:10}}},
+          tooltip:{mode:'index',intersect:false}
+        },
+        scales:{
+          x:{stacked:true, grid:{display:false}},
+          y:{stacked:true, beginAtZero:true, ticks:{callback:v=>fmtN(v)+' totes'}}
+        }
+      }
+    });
+  }
+
+  // Gráfico 2: % del total del día por bin (barra horizontal)
+  const totalTotes = rows.reduce((s,r) => s+(r.TOTAL_TOTES||0), 0);
+  const binTotals  = KG_BINS.map(b => rows.reduce((s,r) => s+(r['N_TOTES_'+b]||0), 0));
+  const binPcts    = binTotals.map(n => totalTotes > 0 ? +(n/totalTotes*100).toFixed(1) : 0);
+
+  destroyChart(prefix+'KgDia');
+  const cvs2 = document.getElementById('chart'+prefix.toUpperCase()+'KgDia');
+  if (cvs2) {
+    charts[prefix+'KgDia'] = new Chart(cvs2.getContext('2d'), {
+      type:'bar',
+      data:{
+        labels: KG_BIN_LBL.map(l=>l+' kg'),
+        datasets:[{
+          label:'% totes del día',
+          data: binPcts,
+          backgroundColor: KG_BIN_CLR.map(c=>c+'CC'),
+          borderWidth:0, borderRadius:4
+        }]
+      },
+      options:{
+        indexAxis:'y', responsive:true, maintainAspectRatio:false, animation:false,
+        plugins:{
+          legend:{display:false},
+          tooltip:{callbacks:{label:c=>fmtPct(c.parsed.x,1)+' ('+fmtN(binTotals[c.dataIndex])+' totes)'}}
+        },
+        scales:{
+          x:{min:0,max:100,ticks:{callback:v=>v+'%'}, grid:{color:'rgba(0,0,0,0.05)'}},
+          y:{grid:{display:false}}
+        }
+      }
+    });
+  }
+}
+
+// ═══════════════════════════════════════════
+//  TAB 5: DETALLE (3 procesos)
+// ═══════════════════════════════════════════
+function renderDetalle(puRows, ciRows, dciRows) {
+  // PUTAWAY
+  const puNd = document.getElementById('pu-det-nodata');
+  const puCt = document.getElementById('pu-det-content');
+  if (!puRows.length) { puNd.style.display='flex'; puCt.style.display='none'; }
+  else {
+    puNd.style.display='none'; puCt.style.display='block';
+    function bfCell(v) {
+      const cls=bfClass(v); return `<span class="bf-cell ${cls}">${bfDisplay(v)}</span>`;
+    }
+    document.getElementById('detalleHead_PU').innerHTML = `<tr>
+      <th>HORA</th><th>UND_TOTAL</th><th>VOL (L)</th><th>L/UND</th><th>REPS</th>
+      <th>NH1%</th><th>NH2%</th><th>NH3%</th><th>NATIVO%</th>
+      <th>BF_MZ0</th><th>BF_MZ1</th><th>BF_MZ2</th><th>BF_MZ3</th><th>BF_HS</th><th>BF_RK</th><th>BF_HV</th>
+    </tr>`;
+    document.getElementById('detalleBody_PU').innerHTML = puRows.map(r=>`
+      <tr>
+        <td style="font-weight:700">${r.HORA}:00</td>
+        <td>${fmtN(r.UND_TOTAL)}</td><td>${fmtN(r.VOL_TOTAL_LITROS,0)}</td>
+        <td>${fmtN(r.VOL_X_UND_TOTAL,2)}</td><td>${fmtN(r.TOTAL_REPS)}</td>
+        <td>${fmtPct(r.PCT_NH1,1)}</td><td>${fmtPct(r.PCT_NH2,1)}</td>
+        <td>${fmtPct(r.PCT_NH3,1)}</td><td>${fmtPct(r.PCT_NATIVO,1)}</td>
+        <td>${bfCell(r.BF_MZ0)}</td><td>${bfCell(r.BF_MZ1)}</td><td>${bfCell(r.BF_MZ2)}</td>
+        <td>${bfCell(r.BF_MZ3)}</td><td>${bfCell(r.BF_HS)}</td><td>${bfCell(r.BF_RK)}</td>
+        <td>${bfCell(r.BF_HV)}</td>
+      </tr>`).join('');
+    const totUnd=puRows.reduce((s,r)=>s+(r.UND_TOTAL||0),0);
+    const totVol=puRows.reduce((s,r)=>s+(r.VOL_TOTAL_LITROS||0),0);
+    const avgBFs=BF_AREAS.map(a=>puRows.reduce((s,r)=>s+(r['BF_'+a]||0),0)/puRows.length);
+    document.getElementById('detalleFoot_PU').innerHTML = `<tr>
+      <td>TOTAL/AVG</td><td>${fmtN(totUnd)}</td><td>${fmtN(totVol,0)}</td>
+      <td>${fmtN(totUnd>0?totVol/totUnd:0,2)}</td><td>${fmtN(Math.max(...puRows.map(r=>r.TOTAL_REPS||0)))}</td>
+      <td>${fmtPct(puRows.reduce((s,r)=>s+(r.PCT_NH1||0),0)/puRows.length,1)}</td>
+      <td>${fmtPct(puRows.reduce((s,r)=>s+(r.PCT_NH2||0),0)/puRows.length,1)}</td>
+      <td>${fmtPct(puRows.reduce((s,r)=>s+(r.PCT_NH3||0),0)/puRows.length,1)}</td>
+      <td>${fmtPct(puRows.reduce((s,r)=>s+(r.PCT_NATIVO||0),0)/puRows.length,1)}</td>
+      ${avgBFs.map(v=>`<td>${fmtPct(v>1?v:v*100,1)}</td>`).join('')}
+    </tr>`;
+  }
+
+  // CHECKIN
+  renderDetalleCI('ci', 'CI', ciRows, 'UDS_CHECKIN', 'UDS CHEQUEADO');
+  // DCI
+  renderDetalleCI('dci', 'DCI', dciRows, 'UDS_DCI', 'UDS REC. RÁPIDA');
+}
+
+function renderDetalleCI(prefix, suffix, rows, udsField, udsLabel) {
+  const nd = document.getElementById(prefix+'-det-nodata');
+  const ct = document.getElementById(prefix+'-det-content');
+  if (!rows.length) { nd.style.display='flex'; ct.style.display='none'; return; }
+  nd.style.display='none'; ct.style.display='block';
+
+  document.getElementById('detalleHead_'+suffix).innerHTML = `<tr>
+    <th>HORA</th><th>${udsLabel}</th><th>VOL (L)</th>
+    <th>L/Ud</th><th>L/Ud TOT.</th><th>L/Ud NO TOT.</th><th>Kg/Ud</th><th>TOTES</th>
+    <th>%XS</th><th>%S</th><th>%M</th><th>%L</th><th>%XL</th>
+    <th>REPS</th><th>NH1%</th><th>NH2%</th><th>NATIVO%</th>
+  </tr>`;
+  document.getElementById('detalleBody_'+suffix).innerHTML = rows.map(r=>`
+    <tr>
+      <td style="font-weight:700">${r.HORA}:00</td>
+      <td>${fmtN(r[udsField])}</td><td>${fmtN(r.VOL_L_TOTAL,0)}</td>
+      <td>${fmtN(r.L_POR_UD,3)}</td>
+      <td style="color:#3483FA;font-weight:600">${r.L_POR_UD_TOTEABLE!=null?fmtN(r.L_POR_UD_TOTEABLE,3):'—'}</td>
+      <td style="color:#00a650;font-weight:600">${r.L_POR_UD_NO_TOTEABLE!=null?fmtN(r.L_POR_UD_NO_TOTEABLE,3):'—'}</td>
+      <td>${fmtN(r.KG_POR_UD,3)}</td>
+      <td>${fmtN(r.TOTAL_TOTES)}</td>
+      <td>${fmtPct(r.PCT_TOTE_XS,1)}</td><td>${fmtPct(r.PCT_TOTE_S,1)}</td>
+      <td>${fmtPct(r.PCT_TOTE_M,1)}</td><td>${fmtPct(r.PCT_TOTE_L,1)}</td>
+      <td>${fmtPct(r.PCT_TOTE_XL,1)}</td>
+      <td>${fmtN(r.TOTAL_REPS)}</td>
+      <td>${fmtPct(r.PCT_NH1,1)}</td><td>${fmtPct(r.PCT_NH2,1)}</td>
+      <td>${fmtPct(r.PCT_NATIVO,1)}</td>
+    </tr>`).join('');
+  const totUds=rows.reduce((s,r)=>s+(r[udsField]||0),0);
+  const totVol=rows.reduce((s,r)=>s+(r.VOL_L_TOTAL||0),0);
+  const totTotes=rows.reduce((s,r)=>s+(r.TOTAL_TOTES||0),0);
+  document.getElementById('detalleFoot_'+suffix).innerHTML = `<tr>
+    <td>TOTAL/AVG</td><td>${fmtN(totUds)}</td><td>${fmtN(totVol,0)}</td>
+    <td>${fmtN(rows.reduce((s,r)=>s+(r.L_POR_UD||0),0)/rows.length,3)}</td>
+    <td style="color:#3483FA">${fmtN(rows.filter(r=>r.L_POR_UD_TOTEABLE).reduce((s,r)=>s+(r.L_POR_UD_TOTEABLE||0),0)/Math.max(rows.filter(r=>r.L_POR_UD_TOTEABLE).length,1),3)}</td>
+    <td style="color:#00a650">${fmtN(rows.filter(r=>r.L_POR_UD_NO_TOTEABLE).reduce((s,r)=>s+(r.L_POR_UD_NO_TOTEABLE||0),0)/Math.max(rows.filter(r=>r.L_POR_UD_NO_TOTEABLE).length,1),3)}</td>
+    <td>${fmtN(rows.reduce((s,r)=>s+(r.KG_POR_UD||0),0)/rows.length,3)}</td>
+    <td>${fmtN(totTotes)}</td>
+    <td>${fmtPct(rows.reduce((s,r)=>s+(r.PCT_TOTE_XS||0),0)/rows.length,1)}</td>
+    <td>${fmtPct(rows.reduce((s,r)=>s+(r.PCT_TOTE_S||0),0)/rows.length,1)}</td>
+    <td>${fmtPct(rows.reduce((s,r)=>s+(r.PCT_TOTE_M||0),0)/rows.length,1)}</td>
+    <td>${fmtPct(rows.reduce((s,r)=>s+(r.PCT_TOTE_L||0),0)/rows.length,1)}</td>
+    <td>${fmtPct(rows.reduce((s,r)=>s+(r.PCT_TOTE_XL||0),0)/rows.length,1)}</td>
+    <td>${fmtN(Math.max(...rows.map(r=>r.TOTAL_REPS||0)))}</td>
+    <td>${fmtPct(rows.reduce((s,r)=>s+(r.PCT_NH1||0),0)/rows.length,1)}</td>
+    <td>${fmtPct(rows.reduce((s,r)=>s+(r.PCT_NH2||0),0)/rows.length,1)}</td>
+    <td>${fmtPct(rows.reduce((s,r)=>s+(r.PCT_NATIVO||0),0)/rows.length,1)}</td>
+  </tr>`;
+}
+
+// ═══════════════════════════════════════════
+//  EVENT LISTENERS
+// ═══════════════════════════════════════════
+
+// Hour filter
+function applyHour() {
+  const f = document.getElementById('hourFrom').value;
+  const t = document.getElementById('hourTo').value;
+  if (f !== '' && t !== '') {
+    const fi = parseInt(f,10), ti = parseInt(t,10);
+    if (!isNaN(fi) && !isNaN(ti) && fi>=0 && fi<=23 && ti>=0 && ti<=23) {
+      hourFrom = fi; hourTo = ti;
+      const nocturno = fi > ti;
+      document.getElementById('hourTagTxt').textContent = 'H'+String(fi).padStart(2,'0')+'\u2192H'+String(ti).padStart(2,'0')+(nocturno?' (noc.)':'');
+      document.getElementById('hourTag').style.display = 'inline-flex';
+    }
+  }
+  renderAll();
+}
+function clearHour() {
+  hourFrom = null; hourTo = null;
+  document.getElementById('hourFrom').value = '';
+  document.getElementById('hourTo').value   = '';
+  document.getElementById('hourTag').style.display = 'none';
+  renderAll();
+}
+document.getElementById('btnApplyHour').addEventListener('click', applyHour);
+document.getElementById('btnClearHour').addEventListener('click', clearHour);
+['hourFrom','hourTo'].forEach(id => {
+  document.getElementById(id).addEventListener('keydown', e => { if(e.key==='Enter') applyHour(); });
+});
+
+// Inner tabs
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
+    this.classList.add('active');
+    document.getElementById('tab-'+this.dataset.tab).classList.add('active');
+  });
+});
+
+// Date picker
+document.getElementById('datePicker').addEventListener('change', function() {
+  selectedDate = this.value; renderAll();
+});
+document.getElementById('btnPrevDay').addEventListener('click', function() {
+  const dp = document.getElementById('datePicker');
+  if (!dp.value) return;
+  const d = new Date(dp.value+'T12:00:00'); d.setDate(d.getDate()-1);
+  const v = d.toISOString().slice(0,10); dp.value=v; selectedDate=v; renderAll();
+});
+document.getElementById('btnNextDay').addEventListener('click', function() {
+  const dp = document.getElementById('datePicker');
+  if (!dp.value) return;
+  const d = new Date(dp.value+'T12:00:00'); d.setDate(d.getDate()+1);
+  const v = d.toISOString().slice(0,10); dp.value=v; selectedDate=v; renderAll();
+});
+
+// ═══════════════════════════════════════════
+//  PUBLIC INJECTION API
+// ═══════════════════════════════════════════
+window.__injectData = function(data) {
+  document.getElementById('dataSourceBadge').textContent = 'DATOS INYECTADOS';
+  document.getElementById('dataSourceBadge').className = 'badge badge-live';
+  initDashboard(data);
+};
+
+// ═══════════════════════════════════════════
+//  CARGA DE DATOS
+//  1) Intenta leer data/peak_data.json (datos reales exportados por n8n)
+//  2) Si no existe (o se abre como archivo local), usa datos de ejemplo
+// ═══════════════════════════════════════════
+(function() {
+  function useMock() {
+    document.getElementById('dataSourceBadge').textContent = 'DATOS DE EJEMPLO';
+    document.getElementById('dataSourceBadge').className = 'badge badge-mock';
+    initDashboard(MOCK_DATA);
+  }
+  if (USE_MOCK || location.protocol === 'file:') { useMock(); return; }
+  fetch('data/peak_data.json').then(function(r) {
+    if (!r.ok) throw new Error(r.status);
+    return r.json();
+  }).then(function(payload) {
+    var rows = Array.isArray(payload) ? payload : (payload.rows || payload.data || []);
+    if (!rows.length) return useMock();
+    document.getElementById('dataSourceBadge').textContent = 'DATOS REALES';
+    document.getElementById('dataSourceBadge').className = 'badge badge-live';
+    initDashboard(rows);
+  }).catch(useMock);
+})();
+</script>
+</body></html>

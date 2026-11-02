@@ -1,0 +1,435 @@
+{
+  "name": "PEAK",
+  "nodes": [
+    {
+      "parameters": {
+        "projectId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "=YOUR_GCP_PROJECT_ID"
+        },
+        "sqlQuery": "CREATE OR REPLACE TABLE `your-project.analytics.PUTAWAY_HORA` AS\n\nWITH\n\n-- ══════════════════════════════════════════════════════════════════════════\n-- 1. PRIMER DÍA DE OPERACIÓN POR REP\n-- ══════════════════════════════════════════════════════════════════════════\nfirst_day_pa AS (\n  SELECT\n    CAST(EMPLOYEE_ID AS STRING) AS OPERATOR_ID,\n    MIN(FIRST_OPS_DAY) AS FIRST_DAY\n  FROM `your-project.source.ATTENDANCE`\n  WHERE FACILITY_ID = 'CD-01'\n    AND SITE_ID = 'MLC'\n    AND FIRST_OPS_DAY IS NOT NULL\n  GROUP BY 1\n),\n\n-- ══════════════════════════════════════════════════════════════════════════\n-- 2. PROCESO PRINCIPAL DE CADA REP\n-- ══════════════════════════════════════════════════════════════════════════\nPROCESO_PRINCIPAL AS (\n  SELECT\n    REP_ID,\n    PROCESO_PRINCIPAL\n  FROM (\n    SELECT\n      OPERATOR_ID AS REP_ID,\n      PROCESS AS PROCESO_PRINCIPAL,\n      SUM(COALESCE(PROCESS_DURATION, 0)) AS HH_PROCESO\n    FROM `your-project.source.EMPLOYEE_ATTRIBUTES`\n    WHERE LOGISTIC_CENTER_ID = 'CD-01'\n      AND START_DATE >= DATE_SUB(\n        CURRENT_DATE('America/Santiago'),\n        INTERVAL 30 DAY\n      )\n      AND OPERATOR_ID IS NOT NULL\n      AND PROCESS IN ('inbound', 'outbound')\n    GROUP BY\n      OPERATOR_ID,\n      PROCESS\n  )\n  QUALIFY ROW_NUMBER() OVER (\n    PARTITION BY REP_ID\n    ORDER BY HH_PROCESO DESC\n  ) = 1\n),\n\n-- ══════════════════════════════════════════════════════════════════════════\n-- 3. FLAG PART-TIME POR REP/DÍA\n-- ══════════════════════════════════════════════════════════════════════════\nATT_PT AS (\n  SELECT\n    DATE(WORK_START_DATE) AS FECHA,\n    CAST(USER_ID AS STRING) AS REP_ID,\n\n    MAX(\n      CASE\n        WHEN REGEXP_CONTAINS(\n          UPPER(COALESCE(SCHEDULE_NAME, '')),\n          r'PTO'\n        ) THEN 0\n\n        WHEN REGEXP_CONTAINS(\n          UPPER(COALESCE(SCHEDULE_NAME, '')),\n          r'(^PT)|(\\bPT\\b)|(PT$)|(XDPT)|(PT[0-9])'\n        )\n        OR REGEXP_CONTAINS(\n          UPPER(COALESCE(SCHEDULE_DESCRIPTION, '')),\n          r'(^PT)|(\\bPT\\b)|(PT$)|(XDPT)|(PT[0-9])'\n        ) THEN 1\n\n        ELSE 0\n      END\n    ) AS IS_PT\n\n  FROM `your-project.source.ATTENDANCE`\n\n  WHERE SITE_ID = 'MLC'\n    AND FACILITY_ID = 'CD-01'\n    AND DATE(WORK_START_DATE) >= DATE_SUB(\n      CURRENT_DATE('America/Santiago'),\n      INTERVAL 30 DAY\n    )\n    AND DATE(WORK_START_DATE) <= CURRENT_DATE('America/Santiago')\n    AND USER_ID IS NOT NULL\n\n  GROUP BY\n    FECHA,\n    REP_ID\n),\n\n-- ══════════════════════════════════════════════════════════════════════════\n-- 4. ACTIVIDAD POR HORA\n-- ══════════════════════════════════════════════════════════════════════════\nACTIVIDAD_HORA AS (\n  SELECT\n    START_DATE AS FECHA,\n    EXTRACT(HOUR FROM START_TIME) AS HORA,\n    CAST(OPERATOR_ID AS STRING) AS REP_ID\n\n  FROM `your-project.source.EMPLOYEE_ATTRIBUTES`\n\n  WHERE LOGISTIC_CENTER_ID = 'CD-01'\n    AND PROCESS = 'inbound'\n    AND SUBPROCESS = 'putaway'\n    AND START_DATE >= DATE_SUB(\n      CURRENT_DATE('America/Santiago'),\n      INTERVAL 30 DAY\n    )\n    AND START_DATE <= CURRENT_DATE('America/Santiago')\n    AND OPERATOR_ID IS NOT NULL\n\n  GROUP BY\n    FECHA,\n    HORA,\n    CAST(OPERATOR_ID AS STRING)\n),\n\n-- ══════════════════════════════════════════════════════════════════════════\n-- 5. CLASIFICACIÓN REP POR HORA\n-- ══════════════════════════════════════════════════════════════════════════\nREPS_CLASIFICADOS AS (\n  SELECT\n    r.FECHA,\n    r.HORA,\n    r.REP_ID AS OPERATOR_ID,\n\n    CASE\n      WHEN pp.PROCESO_PRINCIPAL = 'outbound' THEN 'PALANCA EXT'\n      WHEN att.IS_PT = 1 THEN 'PT'\n\n      ELSE\n        CASE\n          WHEN fd.FIRST_DAY IS NULL THEN 'NH1'\n\n          WHEN DATE_DIFF(\n            DATE_TRUNC(r.FECHA, WEEK(SUNDAY)),\n            DATE_TRUNC(fd.FIRST_DAY, WEEK(SUNDAY)),\n            WEEK\n          ) = 0 THEN 'NH1'\n\n          WHEN DATE_DIFF(\n            DATE_TRUNC(r.FECHA, WEEK(SUNDAY)),\n            DATE_TRUNC(fd.FIRST_DAY, WEEK(SUNDAY)),\n            WEEK\n          ) = 1 THEN 'NH2'\n\n          WHEN DATE_DIFF(\n            DATE_TRUNC(r.FECHA, WEEK(SUNDAY)),\n            DATE_TRUNC(fd.FIRST_DAY, WEEK(SUNDAY)),\n            WEEK\n          ) = 2 THEN 'NH3'\n\n          ELSE 'NATIVO'\n        END\n    END AS TIPO_REP\n\n  FROM ACTIVIDAD_HORA r\n\n  LEFT JOIN PROCESO_PRINCIPAL pp\n    ON pp.REP_ID = r.REP_ID\n\n  LEFT JOIN ATT_PT att\n    ON att.REP_ID = r.REP_ID\n   AND att.FECHA = r.FECHA\n\n  LEFT JOIN first_day_pa fd\n    ON fd.OPERATOR_ID = r.REP_ID\n),\n\n-- ══════════════════════════════════════════════════════════════════════════\n-- 6. CONTEO DE REPS POR HORA\n-- ══════════════════════════════════════════════════════════════════════════\nREP_SHARE AS (\n  SELECT\n    FECHA,\n    HORA,\n\n    COUNT(*) AS TOTAL_REPS,\n\n    COUNTIF(TIPO_REP = 'NH1') AS N_NH1,\n    COUNTIF(TIPO_REP = 'NH2') AS N_NH2,\n    COUNTIF(TIPO_REP = 'NH3') AS N_NH3,\n    COUNTIF(TIPO_REP = 'NATIVO') AS N_NATIVO,\n    COUNTIF(TIPO_REP = 'PT') AS N_PT,\n    COUNTIF(TIPO_REP = 'PALANCA EXT') AS N_PALANCA_EXT,\n\n    ROUND(\n      SAFE_DIVIDE(COUNTIF(TIPO_REP = 'NH1'), COUNT(*)) * 100,\n      1\n    ) AS PCT_NH1,\n\n    ROUND(\n      SAFE_DIVIDE(COUNTIF(TIPO_REP = 'NH2'), COUNT(*)) * 100,\n      1\n    ) AS PCT_NH2,\n\n    ROUND(\n      SAFE_DIVIDE(COUNTIF(TIPO_REP = 'NH3'), COUNT(*)) * 100,\n      1\n    ) AS PCT_NH3,\n\n    ROUND(\n      SAFE_DIVIDE(COUNTIF(TIPO_REP = 'NATIVO'), COUNT(*)) * 100,\n      1\n    ) AS PCT_NATIVO,\n\n    ROUND(\n      SAFE_DIVIDE(COUNTIF(TIPO_REP = 'PT'), COUNT(*)) * 100,\n      1\n    ) AS PCT_PT,\n\n    ROUND(\n      SAFE_DIVIDE(COUNTIF(TIPO_REP = 'PALANCA EXT'), COUNT(*)) * 100,\n      1\n    ) AS PCT_PALANCA_EXT\n\n  FROM REPS_CLASIFICADOS\n  GROUP BY\n    FECHA,\n    HORA\n),\n\n-- ══════════════════════════════════════════════════════════════════════════\n-- 7. CONTEO DE REPS ÚNICOS POR DÍA\n-- ══════════════════════════════════════════════════════════════════════════\nREP_DIA AS (\n  SELECT\n    FECHA,\n\n    COUNT(DISTINCT OPERATOR_ID) AS TOTAL_REPS_DIA,\n\n    COUNT(DISTINCT CASE\n      WHEN TIPO_REP = 'NH1' THEN OPERATOR_ID\n    END) AS N_NH1_DIA,\n\n    COUNT(DISTINCT CASE\n      WHEN TIPO_REP = 'NH2' THEN OPERATOR_ID\n    END) AS N_NH2_DIA,\n\n    COUNT(DISTINCT CASE\n      WHEN TIPO_REP = 'NH3' THEN OPERATOR_ID\n    END) AS N_NH3_DIA,\n\n    COUNT(DISTINCT CASE\n      WHEN TIPO_REP = 'NATIVO' THEN OPERATOR_ID\n    END) AS N_NATIVO_DIA,\n\n    COUNT(DISTINCT CASE\n      WHEN TIPO_REP = 'PT' THEN OPERATOR_ID\n    END) AS N_PT_DIA,\n\n    COUNT(DISTINCT CASE\n      WHEN TIPO_REP = 'PALANCA EXT' THEN OPERATOR_ID\n    END) AS N_PALANCA_EXT_DIA,\n\n    ROUND(\n      SAFE_DIVIDE(\n        COUNT(DISTINCT CASE\n          WHEN TIPO_REP = 'NH1' THEN OPERATOR_ID\n        END),\n        COUNT(DISTINCT OPERATOR_ID)\n      ) * 100,\n      1\n    ) AS PCT_NH1_DIA,\n\n    ROUND(\n      SAFE_DIVIDE(\n        COUNT(DISTINCT CASE\n          WHEN TIPO_REP = 'NH2' THEN OPERATOR_ID\n        END),\n        COUNT(DISTINCT OPERATOR_ID)\n      ) * 100,\n      1\n    ) AS PCT_NH2_DIA,\n\n    ROUND(\n      SAFE_DIVIDE(\n        COUNT(DISTINCT CASE\n          WHEN TIPO_REP = 'NH3' THEN OPERATOR_ID\n        END),\n        COUNT(DISTINCT OPERATOR_ID)\n      ) * 100,\n      1\n    ) AS PCT_NH3_DIA,\n\n    ROUND(\n      SAFE_DIVIDE(\n        COUNT(DISTINCT CASE\n          WHEN TIPO_REP = 'NATIVO' THEN OPERATOR_ID\n        END),\n        COUNT(DISTINCT OPERATOR_ID)\n      ) * 100,\n      1\n    ) AS PCT_NATIVO_DIA,\n\n    ROUND(\n      SAFE_DIVIDE(\n        COUNT(DISTINCT CASE\n          WHEN TIPO_REP = 'PT' THEN OPERATOR_ID\n        END),\n        COUNT(DISTINCT OPERATOR_ID)\n      ) * 100,\n      1\n    ) AS PCT_PT_DIA,\n\n    ROUND(\n      SAFE_DIVIDE(\n        COUNT(DISTINCT CASE\n          WHEN TIPO_REP = 'PALANCA EXT' THEN OPERATOR_ID\n        END),\n        COUNT(DISTINCT OPERATOR_ID)\n      ) * 100,\n      1\n    ) AS PCT_PALANCA_EXT_DIA\n\n  FROM REPS_CLASIFICADOS\n  GROUP BY FECHA\n),\n\n-- ══════════════════════════════════════════════════════════════════════════\n-- 8. CUBING\n-- ══════════════════════════════════════════════════════════════════════════\nCUBING AS (\n  SELECT\n    INVENTORY_ID,\n\n    CASE\n      WHEN FLAG_TOTABLE = TRUE\n        OR TOTABILITY = 'TOTABLE'\n      THEN TRUE\n      ELSE FALSE\n    END AS FLAG_TOTABLE,\n\n    COALESCE(\n      ITE_VOLUMEN,\n      CASE\n        WHEN ITE_HEIGHT > 0\n         AND ITE_LENGTH > 0\n         AND ITE_WIDTH > 0\n        THEN ITE_HEIGHT * ITE_LENGTH * ITE_WIDTH / 1000.0\n        ELSE NULL\n      END\n    ) AS VOL_LITROS,\n\n    CASE\n      WHEN ITE_VOLUMEN IS NOT NULL\n       AND ITE_VOLUMEN > 0\n      THEN 'ITE_VOLUMEN'\n\n      WHEN ITE_HEIGHT > 0\n       AND ITE_LENGTH > 0\n       AND ITE_WIDTH > 0\n      THEN 'CALCULADO'\n\n      ELSE 'SIN_VOLUMETRIA'\n    END AS FUENTE_VOLUMEN\n\n  FROM `your-project.source.SKU_DETAILS`\n\n  WHERE LOGISTIC_CENTER_ID = 'CD-01'\n    AND SIT_SITE_ID = 'MLC'\n\n  QUALIFY ROW_NUMBER() OVER (\n    PARTITION BY INVENTORY_ID\n    ORDER BY\n      (ITE_VOLUMEN IS NOT NULL) DESC,\n      (ITE_HEIGHT IS NOT NULL) DESC\n  ) = 1\n),\n\n-- ══════════════════════════════════════════════════════════════════════════\n-- 9. UNIDADES POR HORA\n-- ══════════════════════════════════════════════════════════════════════════\nPROD_PA AS (\n  SELECT\n    START_DATE AS FECHA,\n    EXTRACT(HOUR FROM START_TIME) AS HORA,\n\n    CASE\n      WHEN PD_AREA LIKE '%HV%' THEN 'HV3'\n      WHEN PD_AREA = 'RK0' THEN 'RK0'\n      WHEN PD_AREA LIKE '%RS%' THEN 'RS0'\n      WHEN PD_AREA = 'MZ1' THEN 'MZ1'\n      WHEN PD_AREA = 'MZ2' THEN 'MZ2'\n      WHEN PD_AREA = 'MZ3' THEN 'MZ3'\n      WHEN PD_AREA = 'MZ0' THEN 'MZ0'\n      WHEN PD_AREA LIKE '%BL%' THEN 'BL0'\n      ELSE 'OTHERS'\n    END AS AREA,\n\n    SUM(UNITS) AS UNIDADES\n\n  FROM `your-project.source.EMPLOYEE_ATTRIBUTES`\n\n  WHERE LOGISTIC_CENTER_ID = 'CD-01'\n    AND SUBPROCESS = 'putaway'\n    AND START_DATE >= DATE_SUB(\n      CURRENT_DATE('America/Santiago'),\n      INTERVAL 30 DAY\n    )\n    AND START_DATE <= CURRENT_DATE('America/Santiago')\n    AND OPERATOR_ID IS NOT NULL\n\n  GROUP BY\n    FECHA,\n    HORA,\n    AREA\n),\n\nUND_PIVOTED AS (\n  SELECT\n    FECHA,\n    HORA,\n\n    SUM(UNIDADES) AS UND_TOTAL,\n    SUM(CASE WHEN AREA = 'MZ0' THEN UNIDADES ELSE 0 END) AS UND_MZ0,\n    SUM(CASE WHEN AREA = 'MZ1' THEN UNIDADES ELSE 0 END) AS UND_MZ1,\n    SUM(CASE WHEN AREA = 'MZ2' THEN UNIDADES ELSE 0 END) AS UND_MZ2,\n    SUM(CASE WHEN AREA = 'MZ3' THEN UNIDADES ELSE 0 END) AS UND_MZ3,\n    SUM(CASE WHEN AREA = 'BL0' THEN UNIDADES ELSE 0 END) AS UND_BL,\n    SUM(CASE WHEN AREA = 'HV3' THEN UNIDADES ELSE 0 END) AS UND_HV,\n    SUM(CASE WHEN AREA = 'RS0' THEN UNIDADES ELSE 0 END) AS UND_RS,\n    SUM(CASE WHEN AREA = 'OTHERS' THEN UNIDADES ELSE 0 END) AS UND_OTHERS\n\n  FROM PROD_PA\n  GROUP BY\n    FECHA,\n    HORA\n),\n\n-- ══════════════════════════════════════════════════════════════════════════\n-- 10. MOVIMIENTOS PUT_AWAY\n--     Corrección aplicada: +1 hora únicamente a FBM_CREATED_DATE\n-- ══════════════════════════════════════════════════════════════════════════\nMOVIMIENTOS_PA AS (\n  SELECT\n    DATE(\n      DATETIME_ADD(m.FBM_CREATED_DATE, INTERVAL 1 HOUR)\n    ) AS FECHA,\n\n    EXTRACT(\n      HOUR\n      FROM DATETIME_ADD(m.FBM_CREATED_DATE, INTERVAL 1 HOUR)\n    ) AS HORA,\n\n    CASE\n      WHEN m.ADDRESS_TO LIKE '%HV%' THEN 'HV3'\n      WHEN m.ADDRESS_TO LIKE '%RK-0-1%' THEN 'HS'\n      WHEN m.ADDRESS_TO LIKE '%RK-0-0%' THEN 'RK0'\n      WHEN m.ADDRESS_TO LIKE '%RS%' THEN 'RS0'\n      WHEN m.ADDRESS_TO LIKE '%MZ-1%' THEN 'MZ1'\n      WHEN m.ADDRESS_TO LIKE '%MZ-2%' THEN 'MZ2'\n      WHEN m.ADDRESS_TO LIKE '%MZ-3%' THEN 'MZ3'\n      WHEN m.ADDRESS_TO LIKE '%MZ-0%' THEN 'MZ0'\n      WHEN m.ADDRESS_TO LIKE '%BL%' THEN 'BL0'\n      ELSE 'OTHERS'\n    END AS AREA,\n\n    CASE\n      WHEN c.FLAG_TOTABLE IS TRUE THEN 'TOTEABLE'\n      ELSE 'NO_TOTEABLE'\n    END AS TIPO_TOTE,\n\n    m.FBM_QUANTITY,\n\n    m.FBM_QUANTITY * c.VOL_LITROS AS VOLUMEN_LITROS,\n\n    CASE\n      WHEN c.VOL_LITROS IS NOT NULL\n      THEN m.FBM_QUANTITY\n      ELSE 0\n    END AS CANTIDAD_CON_VOL,\n\n    CASE\n      WHEN c.VOL_LITROS IS NULL\n      THEN m.FBM_QUANTITY\n      ELSE 0\n    END AS CANTIDAD_SIN_VOL\n\n  FROM `your-project.source.STOCK_MOVEMENTS` m\n\n  LEFT JOIN CUBING c\n    ON m.INVENTORY_ID = c.INVENTORY_ID\n\n  WHERE m.WAREHOUSE_ID = 'CD-01'\n    AND m.FBM_REASON_PROCESS = 'put_away'\n\n    -- Filtro original de los últimos 30 días\n    AND m.FBM_CREATED_DATE >= DATETIME_SUB(\n      CURRENT_DATETIME(),\n      INTERVAL 30 DAY\n    )\n\n    AND m.FBM_CREATED_DATE < CURRENT_DATETIME()\n\n    AND m.FBM_QUANTITY > 0\n),\n\n-- ══════════════════════════════════════════════════════════════════════════\n-- 11. PIVOT VOLUMETRÍA POR HORA\n-- ══════════════════════════════════════════════════════════════════════════\nVOL_PIVOTED AS (\n  SELECT\n    FECHA,\n    HORA,\n\n    SUM(\n      CASE\n        WHEN TIPO_TOTE = 'TOTEABLE'\n        THEN FBM_QUANTITY\n        ELSE 0\n      END\n    ) AS UND_TOTEABLE_BF,\n\n    SUM(\n      CASE\n        WHEN TIPO_TOTE = 'NO_TOTEABLE'\n        THEN FBM_QUANTITY\n        ELSE 0\n      END\n    ) AS UND_NO_TOTEABLE_BF,\n\n    SUM(CANTIDAD_SIN_VOL) AS UND_SIN_VOLUMEN,\n    SUM(CANTIDAD_CON_VOL) AS UND_CON_VOLUMEN,\n    SUM(VOLUMEN_LITROS) AS VOL_TOTAL_LITROS,\n\n    SUM(\n      CASE\n        WHEN TIPO_TOTE = 'TOTEABLE'\n        THEN VOLUMEN_LITROS\n      END\n    ) AS VOL_TOTEABLE_LITROS,\n\n    SUM(\n      CASE\n        WHEN TIPO_TOTE = 'NO_TOTEABLE'\n        THEN VOLUMEN_LITROS\n      END\n    ) AS VOL_NO_TOTEABLE_LITROS,\n\n    SUM(CASE WHEN AREA = 'MZ0' THEN VOLUMEN_LITROS END) AS VOL_MZ0,\n    SUM(CASE WHEN AREA = 'MZ1' THEN VOLUMEN_LITROS END) AS VOL_MZ1,\n    SUM(CASE WHEN AREA = 'MZ2' THEN VOLUMEN_LITROS END) AS VOL_MZ2,\n    SUM(CASE WHEN AREA = 'MZ3' THEN VOLUMEN_LITROS END) AS VOL_MZ3,\n    SUM(CASE WHEN AREA = 'HS' THEN VOLUMEN_LITROS END) AS VOL_HS,\n    SUM(CASE WHEN AREA = 'RK0' THEN VOLUMEN_LITROS END) AS VOL_RK,\n    SUM(CASE WHEN AREA = 'BL0' THEN VOLUMEN_LITROS END) AS VOL_BL,\n    SUM(CASE WHEN AREA = 'HV3' THEN VOLUMEN_LITROS END) AS VOL_HV,\n\n    SUM(\n      CASE\n        WHEN AREA = 'HS'\n        THEN FBM_QUANTITY\n        ELSE 0\n      END\n    ) AS UND_HS_BF,\n\n    SUM(\n      CASE\n        WHEN AREA = 'RK0'\n        THEN FBM_QUANTITY\n        ELSE 0\n      END\n    ) AS UND_RK_BF,\n\n    SUM(\n      CASE\n        WHEN AREA = 'MZ0'\n        THEN CANTIDAD_CON_VOL\n        ELSE 0\n      END\n    ) AS UND_CON_VOL_MZ0,\n\n    SUM(\n      CASE\n        WHEN AREA = 'MZ1'\n        THEN CANTIDAD_CON_VOL\n        ELSE 0\n      END\n    ) AS UND_CON_VOL_MZ1,\n\n    SUM(\n      CASE\n        WHEN AREA = 'MZ2'\n        THEN CANTIDAD_CON_VOL\n        ELSE 0\n      END\n    ) AS UND_CON_VOL_MZ2,\n\n    SUM(\n      CASE\n        WHEN AREA = 'MZ3'\n        THEN CANTIDAD_CON_VOL\n        ELSE 0\n      END\n    ) AS UND_CON_VOL_MZ3,\n\n    SUM(\n      CASE\n        WHEN AREA = 'HS'\n        THEN CANTIDAD_CON_VOL\n        ELSE 0\n      END\n    ) AS UND_CON_VOL_HS,\n\n    SUM(\n      CASE\n        WHEN AREA = 'RK0'\n        THEN CANTIDAD_CON_VOL\n        ELSE 0\n      END\n    ) AS UND_CON_VOL_RK,\n\n    SUM(\n      CASE\n        WHEN AREA = 'BL0'\n        THEN CANTIDAD_CON_VOL\n        ELSE 0\n      END\n    ) AS UND_CON_VOL_BL,\n\n    SUM(\n      CASE\n        WHEN AREA = 'HV3'\n        THEN CANTIDAD_CON_VOL\n        ELSE 0\n      END\n    ) AS UND_CON_VOL_HV\n\n  FROM MOVIMIENTOS_PA\n  GROUP BY\n    FECHA,\n    HORA\n),\n\n-- ══════════════════════════════════════════════════════════════════════════\n-- 12. BINFULLNESS POR ÁREA\n-- ══════════════════════════════════════════════════════════════════════════\nBF_AREA AS (\n  SELECT\n    FBM_CURRENT_DATE AS BF_DATE,\n\n    CASE\n      WHEN DIRECCION LIKE '%HV%' THEN 'HV3'\n      WHEN DIRECCION LIKE '%RK-0-0%' THEN 'RK0'\n      WHEN DIRECCION LIKE '%RK-0-1%' THEN 'HS'\n      WHEN DIRECCION LIKE '%RS%' THEN 'RS0'\n      WHEN DIRECCION LIKE '%MZ-1%' THEN 'MZ1'\n      WHEN DIRECCION LIKE '%MZ-2%' THEN 'MZ2'\n      WHEN DIRECCION LIKE '%MZ-3%' THEN 'MZ3'\n      WHEN DIRECCION LIKE '%MZ-0%' THEN 'MZ0'\n      WHEN DIRECCION LIKE '%BL%' THEN 'BL0'\n      ELSE 'OTHERS'\n    END AS AREA,\n\n    SAFE_DIVIDE(\n      SUM(\n        CASE\n          WHEN TOTAL > 0 THEN\n            CASE\n              WHEN VOLUMEN_REAL > CAP_VOLUMEN_BIN_100\n              THEN CAP_VOLUMEN_BIN_100\n              ELSE VOLUMEN_REAL\n            END\n        END\n      ),\n      SUM(\n        CASE\n          WHEN TOTAL > 0 THEN\n            CASE\n              WHEN CAP_VOLUMEN_BIN_100 IS NULL\n              THEN VOLUMEN_REAL\n              ELSE CAP_VOLUMEN_BIN_100\n            END\n        END\n      )\n    ) AS RATIO_BIN\n\n  FROM `your-project.source.BIN_CAPACITY_STOCK`\n\n  WHERE PAIS = 'Chile'\n    AND SITE = 'CD-01'\n    AND NUMERO_SKU IS NOT NULL\n    AND CAP_VOLUMEN_BIN_100 IS NOT NULL\n    AND FBM_CURRENT_DATE >= DATE_SUB(\n      CURRENT_DATE('America/Santiago'),\n      INTERVAL 30 DAY\n    )\n    AND FBM_CURRENT_DATE <= CURRENT_DATE('America/Santiago')\n\n  GROUP BY\n    BF_DATE,\n    AREA\n),\n\nBF_PIVOTED AS (\n  SELECT\n    BF_DATE,\n\n    MAX(CASE WHEN AREA = 'MZ0' THEN RATIO_BIN END) AS BF_MZ0,\n    MAX(CASE WHEN AREA = 'MZ1' THEN RATIO_BIN END) AS BF_MZ1,\n    MAX(CASE WHEN AREA = 'MZ2' THEN RATIO_BIN END) AS BF_MZ2,\n    MAX(CASE WHEN AREA = 'MZ3' THEN RATIO_BIN END) AS BF_MZ3,\n    MAX(CASE WHEN AREA = 'HS' THEN RATIO_BIN END) AS BF_HS,\n    MAX(CASE WHEN AREA = 'RK0' THEN RATIO_BIN END) AS BF_RK,\n    MAX(CASE WHEN AREA = 'HV3' THEN RATIO_BIN END) AS BF_HV\n\n  FROM BF_AREA\n  GROUP BY BF_DATE\n)\n\n-- ══════════════════════════════════════════════════════════════════════════\n-- SELECT FINAL\n-- ══════════════════════════════════════════════════════════════════════════\nSELECT\n  rs.FECHA,\n  rs.HORA,\n\n  -- Reps por hora\n  rs.TOTAL_REPS,\n  rs.N_NH1,\n  rs.N_NH2,\n  rs.N_NH3,\n  rs.N_NATIVO,\n  rs.N_PT,\n  rs.N_PALANCA_EXT,\n  rs.PCT_NH1,\n  rs.PCT_NH2,\n  rs.PCT_NH3,\n  rs.PCT_NATIVO,\n  rs.PCT_PT,\n  rs.PCT_PALANCA_EXT,\n\n  -- Reps únicos por día\n  rd.TOTAL_REPS_DIA,\n  rd.N_NH1_DIA,\n  rd.N_NH2_DIA,\n  rd.N_NH3_DIA,\n  rd.N_NATIVO_DIA,\n  rd.N_PT_DIA,\n  rd.N_PALANCA_EXT_DIA,\n  rd.PCT_NH1_DIA,\n  rd.PCT_NH2_DIA,\n  rd.PCT_NH3_DIA,\n  rd.PCT_NATIVO_DIA,\n  rd.PCT_PT_DIA,\n  rd.PCT_PALANCA_EXT_DIA,\n\n  -- Unidades desde DM_PRODUCTIVITY\n  COALESCE(u.UND_TOTAL, 0) AS UND_TOTAL,\n  COALESCE(u.UND_MZ0, 0) AS UND_MZ0,\n  COALESCE(u.UND_MZ1, 0) AS UND_MZ1,\n  COALESCE(u.UND_MZ2, 0) AS UND_MZ2,\n  COALESCE(u.UND_MZ3, 0) AS UND_MZ3,\n  COALESCE(v.UND_HS_BF, 0) AS UND_HS,\n  COALESCE(v.UND_RK_BF, 0) AS UND_RK,\n  COALESCE(u.UND_BL, 0) AS UND_BL,\n  COALESCE(u.UND_HV, 0) AS UND_HV,\n  COALESCE(u.UND_RS, 0) AS UND_RS,\n  COALESCE(u.UND_OTHERS, 0) AS UND_OTHERS,\n\n  -- Unidades toteable / no toteable\n  COALESCE(v.UND_TOTEABLE_BF, 0) AS UND_TOTEABLE,\n  COALESCE(v.UND_NO_TOTEABLE_BF, 0) AS UND_NO_TOTEABLE,\n\n  -- Diagnóstico volumétrico\n  COALESCE(v.UND_SIN_VOLUMEN, 0) AS UND_SIN_VOLUMEN,\n\n  ROUND(\n    SAFE_DIVIDE(\n      v.UND_CON_VOLUMEN,\n      v.UND_CON_VOLUMEN + v.UND_SIN_VOLUMEN\n    ) * 100,\n    1\n  ) AS PCT_COBERTURA_VOL,\n\n  -- Porcentaje toteable / no toteable\n  ROUND(\n    SAFE_DIVIDE(\n      v.UND_TOTEABLE_BF,\n      v.UND_TOTEABLE_BF + v.UND_NO_TOTEABLE_BF\n    ) * 100,\n    1\n  ) AS PCT_TOTEABLE,\n\n  ROUND(\n    SAFE_DIVIDE(\n      v.UND_NO_TOTEABLE_BF,\n      v.UND_TOTEABLE_BF + v.UND_NO_TOTEABLE_BF\n    ) * 100,\n    1\n  ) AS PCT_NO_TOTEABLE,\n\n  -- Shares por área\n  ROUND(SAFE_DIVIDE(u.UND_MZ0, u.UND_TOTAL) * 100, 1) AS SHR_MZ0,\n  ROUND(SAFE_DIVIDE(u.UND_MZ1, u.UND_TOTAL) * 100, 1) AS SHR_MZ1,\n  ROUND(SAFE_DIVIDE(u.UND_MZ2, u.UND_TOTAL) * 100, 1) AS SHR_MZ2,\n  ROUND(SAFE_DIVIDE(u.UND_MZ3, u.UND_TOTAL) * 100, 1) AS SHR_MZ3,\n  ROUND(SAFE_DIVIDE(v.UND_HS_BF, u.UND_TOTAL) * 100, 1) AS SHR_HS,\n  ROUND(SAFE_DIVIDE(v.UND_RK_BF, u.UND_TOTAL) * 100, 1) AS SHR_RK,\n  ROUND(SAFE_DIVIDE(u.UND_BL, u.UND_TOTAL) * 100, 1) AS SHR_BL,\n  ROUND(SAFE_DIVIDE(u.UND_HV, u.UND_TOTAL) * 100, 1) AS SHR_HV,\n  ROUND(SAFE_DIVIDE(u.UND_RS, u.UND_TOTAL) * 100, 1) AS SHR_RS,\n  ROUND(SAFE_DIVIDE(u.UND_OTHERS, u.UND_TOTAL) * 100, 1) AS SHR_OTHERS,\n\n  -- Volúmenes totales\n  ROUND(v.VOL_TOTAL_LITROS, 1) AS VOL_TOTAL_LITROS,\n  ROUND(v.VOL_TOTEABLE_LITROS, 1) AS VOL_TOTEABLE_LITROS,\n  ROUND(v.VOL_NO_TOTEABLE_LITROS, 1) AS VOL_NO_TOTEABLE_LITROS,\n\n  -- Volúmenes por área\n  ROUND(v.VOL_MZ0, 1) AS VOL_MZ0,\n  ROUND(v.VOL_MZ1, 1) AS VOL_MZ1,\n  ROUND(v.VOL_MZ2, 1) AS VOL_MZ2,\n  ROUND(v.VOL_MZ3, 1) AS VOL_MZ3,\n  ROUND(v.VOL_HS, 1) AS VOL_HS,\n  ROUND(v.VOL_RK, 1) AS VOL_RK,\n  ROUND(v.VOL_BL, 1) AS VOL_BL,\n  ROUND(v.VOL_HV, 1) AS VOL_HV,\n\n  -- Volumen por unidad según tipo\n  ROUND(\n    SAFE_DIVIDE(v.VOL_TOTEABLE_LITROS, u.UND_TOTAL),\n    2\n  ) AS VOL_X_UND_TOTEABLE,\n\n  ROUND(\n    SAFE_DIVIDE(v.VOL_NO_TOTEABLE_LITROS, u.UND_TOTAL),\n    2\n  ) AS VOL_X_UND_NO_TOTEABLE,\n\n  -- Volumen por unidad según área\n  ROUND(SAFE_DIVIDE(v.VOL_MZ0, u.UND_MZ0), 2) AS VOL_X_UND_MZ0,\n  ROUND(SAFE_DIVIDE(v.VOL_MZ1, u.UND_MZ1), 2) AS VOL_X_UND_MZ1,\n  ROUND(SAFE_DIVIDE(v.VOL_MZ2, u.UND_MZ2), 2) AS VOL_X_UND_MZ2,\n  ROUND(SAFE_DIVIDE(v.VOL_MZ3, u.UND_MZ3), 2) AS VOL_X_UND_MZ3,\n  ROUND(SAFE_DIVIDE(v.VOL_HS, v.UND_HS_BF), 2) AS VOL_X_UND_HS,\n  ROUND(SAFE_DIVIDE(v.VOL_RK, v.UND_RK_BF), 2) AS VOL_X_UND_RK,\n  ROUND(SAFE_DIVIDE(v.VOL_BL, u.UND_BL), 2) AS VOL_X_UND_BL,\n  ROUND(SAFE_DIVIDE(v.VOL_HV, u.UND_HV), 2) AS VOL_X_UND_HV,\n\n  -- Promedio ponderado total\n  ROUND(\n    SAFE_DIVIDE(v.VOL_TOTAL_LITROS, u.UND_TOTAL),\n    2\n  ) AS VOL_X_UND_PONDERADO,\n\n  -- Binfullness por área\n  ROUND(COALESCE(bf.BF_MZ0, 0) * 100, 1) AS BF_MZ0,\n  ROUND(COALESCE(bf.BF_MZ1, 0) * 100, 1) AS BF_MZ1,\n  ROUND(COALESCE(bf.BF_MZ2, 0) * 100, 1) AS BF_MZ2,\n  ROUND(COALESCE(bf.BF_MZ3, 0) * 100, 1) AS BF_MZ3,\n  ROUND(COALESCE(bf.BF_HS, 0) * 100, 1) AS BF_HS,\n  ROUND(COALESCE(bf.BF_RK, 0) * 100, 1) AS BF_RK,\n  ROUND(COALESCE(bf.BF_HV, 0) * 100, 1) AS BF_HV\n\nFROM REP_SHARE rs\n\nLEFT JOIN REP_DIA rd\n  ON rd.FECHA = rs.FECHA\n\nLEFT JOIN UND_PIVOTED u\n  ON u.FECHA = rs.FECHA\n AND u.HORA = rs.HORA\n\nLEFT JOIN VOL_PIVOTED v\n  ON v.FECHA = rs.FECHA\n AND v.HORA = rs.HORA\n\nLEFT JOIN BF_PIVOTED bf\n  ON bf.BF_DATE = rs.FECHA\n\nORDER BY\n  rs.FECHA DESC,\n  rs.HORA DESC;",
+        "options": {}
+      },
+      "id": "b2a8d8f7-5872-4893-ac7b-f9aceaa5a5b4",
+      "name": "PEAK_PUTAWAY_HORA",
+      "type": "n8n-nodes-base.googleBigQuery",
+      "position": [
+        -80,
+        -1008
+      ],
+      "typeVersion": 2.1,
+      "retryOnFail": true,
+      "credentials": {
+        "googleGenericOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google BigQuery OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "projectId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "=YOUR_GCP_PROJECT_ID"
+        },
+        "sqlQuery": "-- Nodo PEAK_PUTAWAY\nSELECT 'PUTAWAY' AS PROCESO, * \nFROM `your-project.analytics.PUTAWAY_HORA` \nORDER BY FECHA, HORA\n",
+        "options": {}
+      },
+      "id": "ef0cede2-6df8-4ce5-8dda-d53f8d0e3eb5",
+      "name": "PEAK_PUTAWAY",
+      "type": "n8n-nodes-base.googleBigQuery",
+      "position": [
+        -80,
+        -592
+      ],
+      "typeVersion": 2.1,
+      "credentials": {
+        "googleGenericOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google BigQuery OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "projectId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "=YOUR_GCP_PROJECT_ID"
+        },
+        "sqlQuery": "-- ================================================================\n-- CHECKIN_HORA — versión con auto-ajuste de horario (DST-safe)\n-- Reemplaza el parche fijo \"+1 HORA\" por FN_API_TIMEZONE, que\n-- recalcula el offset Chile correcto (UTC-3 verano / UTC-4 invierno)\n-- para la fecha de cada fila, en vez de sumar un número fijo.\n-- ================================================================\nCREATE OR REPLACE TABLE `your-project.analytics.CHECKIN_HORA` AS\n\nWITH\n\nfirst_day_chk AS (\n  SELECT\n    CAST(EMPLOYEE_ID AS STRING) AS OPERATOR_ID,\n    MIN(FIRST_OPS_DAY) AS FIRST_DAY\n  FROM `your-project.source.ATTENDANCE`\n  WHERE FACILITY_ID = 'CD-01'\n    AND SITE_ID = 'MLC'\n    AND FIRST_OPS_DAY IS NOT NULL\n  GROUP BY 1\n),\n\nLDAPS AS (\n  SELECT\n    CAST(OPERATOR_ID AS STRING) AS OPERATOR_ID,\n    LDAP_USER,\n    MANAGER_LDAP_USER\n  FROM (\n    SELECT\n      OPERATOR_ID,\n      LDAP_USER,\n      MANAGER_LDAP_USER,\n      ROW_NUMBER() OVER (\n        PARTITION BY OPERATOR_ID\n        ORDER BY START_DATE DESC\n      ) AS rn\n    FROM `your-project.source.OPERATOR_PRODUCTIVITY`\n    WHERE AREA = 'inbound'\n      AND PROCESS IN ('checkin', 'direct_checkin')\n      AND AUD_INS_DTTM >= DATETIME_SUB(CURRENT_DATETIME(), INTERVAL 30 DAY)\n      AND SITE_ID = 'MLC'\n      AND LOGISTIC_CENTER_ID = 'CD-01'\n  )\n  WHERE rn = 1\n),\n\nCUBING AS (\n  SELECT\n    INVENTORY_ID,\n    COALESCE(\n      ITE_VOLUMEN,\n      CASE\n        WHEN ITE_HEIGHT > 0 AND ITE_LENGTH > 0 AND ITE_WIDTH > 0\n        THEN ITE_HEIGHT * ITE_LENGTH * ITE_WIDTH / 1000.0\n        ELSE NULL\n      END\n    ) AS VOL_LITROS,\n    CASE\n      WHEN FLAG_TOTABLE = TRUE OR TOTABILITY = 'TOTABLE' THEN TRUE\n      ELSE FALSE\n    END AS FLAG_TOTABLE,\n    CASE\n      WHEN UPPER(COALESCE(ITE_WEIGHT_UNIT, '')) IN ('G', 'GR', 'GRAM', 'GRAMS')\n      THEN SAFE_DIVIDE(ITE_WEIGHT, 1000.0)\n      ELSE ITE_WEIGHT\n    END AS PESO_KG,\n    CASE\n      WHEN ITE_VOLUMEN IS NOT NULL AND ITE_VOLUMEN > 0 THEN 'ITE_VOLUMEN'\n      WHEN ITE_HEIGHT > 0 AND ITE_LENGTH > 0 AND ITE_WIDTH > 0 THEN 'CALCULADO'\n      ELSE 'SIN_VOLUMETRIA'\n    END AS FUENTE_VOLUMEN\n  FROM `your-project.source.SKU_DETAILS`\n  WHERE LOGISTIC_CENTER_ID = 'CD-01'\n    AND SIT_SITE_ID = 'MLC'\n  QUALIFY ROW_NUMBER() OVER (\n    PARTITION BY INVENTORY_ID\n    ORDER BY (ITE_VOLUMEN IS NOT NULL) DESC, (ITE_HEIGHT IS NOT NULL) DESC\n  ) = 1\n),\n\nOPS_CHK AS (\n  SELECT DISTINCT\n    CAST(OPERATOR_ID AS STRING) AS OPERATOR_ID,\n    DATE(START_DATE) AS FECHA\n  FROM `your-project.source.OPERATOR_PRODUCTIVITY`\n  WHERE AREA = 'inbound'\n    AND PROCESS = 'checkin'\n    AND DATE(START_DATE) >= DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY)\n    AND LOGISTIC_CENTER_ID = 'CD-01'\n    AND SITE_ID = 'MLC'\n),\n\n-- ================================================================\n-- TOTE FLAG — auto-ajuste vía FN_API_TIMEZONE\n-- ================================================================\nTOT_FLAG AS (\n  SELECT\n    DATE(`your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS FECHA,\n    EXTRACT(HOUR FROM `your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS HORA,\n    ROUND(\n      SAFE_DIVIDE(\n        SUM(CASE WHEN c.FLAG_TOTABLE IS TRUE THEN m.FBM_QUANTITY ELSE 0 END),\n        NULLIF(SUM(m.FBM_QUANTITY), 0)\n      ), 6\n    ) AS PCT_TOTEABLE\n  FROM `your-project.source.STOCK_MOVEMENTS` m\n  INNER JOIN OPS_CHK ops\n    ON ops.OPERATOR_ID = CAST(m.FBM_USER_ID AS STRING)\n   AND ops.FECHA = DATE(`your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM))\n  LEFT JOIN CUBING c ON m.INVENTORY_ID = c.INVENTORY_ID\n  WHERE m.WAREHOUSE_ID = 'CD-01'\n    AND m.FBM_REASON_PROCESS = 'inbound'\n    AND m.ADDRESS_FROM IS NULL\n    AND m.ADDRESS_TO LIKE 'MU-%'\n    AND m.AUD_INS_DTTM >= DATETIME(TIMESTAMP(DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY), 'America/Santiago'))\n    AND m.AUD_INS_DTTM <  DATETIME(TIMESTAMP(DATE_ADD(CURRENT_DATE('America/Santiago'), INTERVAL 1 DAY), 'America/Santiago'))\n  GROUP BY FECHA, HORA\n),\n\n-- ================================================================\n-- TOTE LMS — auto-ajuste vía FN_API_TIMEZONE\n-- ================================================================\nTOTE_LMS AS (\n  SELECT\n    DATE(`your-project.udf.FN_TIMEZONE`('MLC', EVENT_DATE)) AS FECHA,\n    EXTRACT(HOUR FROM `your-project.udf.FN_TIMEZONE`('MLC', EVENT_DATE)) AS HORA,\n    ROUND(SAFE_DIVIDE(COUNTIF(UPPER(JSON_VALUE(ATTRIBUTES, '$.tote_size')) = 'XS'), NULLIF(COUNTIF(JSON_VALUE(ATTRIBUTES, '$.tote_size') IS NOT NULL), 0)), 6) AS PCT_XS,\n    ROUND(SAFE_DIVIDE(COUNTIF(UPPER(JSON_VALUE(ATTRIBUTES, '$.tote_size')) = 'S'),  NULLIF(COUNTIF(JSON_VALUE(ATTRIBUTES, '$.tote_size') IS NOT NULL), 0)), 6) AS PCT_S,\n    ROUND(SAFE_DIVIDE(COUNTIF(UPPER(JSON_VALUE(ATTRIBUTES, '$.tote_size')) = 'M'),  NULLIF(COUNTIF(JSON_VALUE(ATTRIBUTES, '$.tote_size') IS NOT NULL), 0)), 6) AS PCT_M,\n    ROUND(SAFE_DIVIDE(COUNTIF(UPPER(JSON_VALUE(ATTRIBUTES, '$.tote_size')) = 'L'),  NULLIF(COUNTIF(JSON_VALUE(ATTRIBUTES, '$.tote_size') IS NOT NULL), 0)), 6) AS PCT_L,\n    ROUND(SAFE_DIVIDE(COUNTIF(UPPER(JSON_VALUE(ATTRIBUTES, '$.tote_size')) = 'XL'), NULLIF(COUNTIF(JSON_VALUE(ATTRIBUTES, '$.tote_size') IS NOT NULL), 0)), 6) AS PCT_XL\n  FROM `your-project.source.OPERATOR_EVENTS`\n  WHERE FACILITY = 'CD-01'\n    AND PROCESS = 'checkin'\n    AND JSON_VALUE(ATTRIBUTES, '$.tote_size') IS NOT NULL\n    AND EVENT_DATE >= DATETIME(TIMESTAMP(DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY), 'America/Santiago'))\n    AND EVENT_DATE <  DATETIME(TIMESTAMP(DATE_ADD(CURRENT_DATE('America/Santiago'), INTERVAL 1 DAY), 'America/Santiago'))\n  GROUP BY FECHA, HORA\n),\n\n-- ================================================================\n-- VOLUMETRÍA Y PESO POR HORA — auto-ajuste vía FN_API_TIMEZONE\n-- ================================================================\nVOL_RATIO AS (\n  SELECT\n    DATE(`your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS FECHA,\n    EXTRACT(HOUR FROM `your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS HORA,\n    ROUND(SAFE_DIVIDE(SUM(CASE WHEN c.FLAG_TOTABLE IS TRUE AND c.VOL_LITROS IS NOT NULL THEN m.FBM_QUANTITY * c.VOL_LITROS END), NULLIF(SUM(CASE WHEN c.FLAG_TOTABLE IS TRUE AND c.VOL_LITROS IS NOT NULL THEN m.FBM_QUANTITY END), 0)), 3) AS L_POR_UD_TOTEABLE,\n    ROUND(SAFE_DIVIDE(SUM(CASE WHEN c.FLAG_TOTABLE IS NOT TRUE AND c.VOL_LITROS IS NOT NULL THEN m.FBM_QUANTITY * c.VOL_LITROS END), NULLIF(SUM(CASE WHEN c.FLAG_TOTABLE IS NOT TRUE AND c.VOL_LITROS IS NOT NULL THEN m.FBM_QUANTITY END), 0)), 3) AS L_POR_UD_NO_TOTEABLE,\n    ROUND(SAFE_DIVIDE(SUM(CASE WHEN c.FLAG_TOTABLE IS TRUE THEN m.FBM_QUANTITY * COALESCE(c.PESO_KG, 0) END), NULLIF(SUM(CASE WHEN c.FLAG_TOTABLE IS TRUE THEN m.FBM_QUANTITY END), 0)), 3) AS KG_POR_UD_TOTEABLE,\n    ROUND(SAFE_DIVIDE(SUM(CASE WHEN c.FLAG_TOTABLE IS NOT TRUE THEN m.FBM_QUANTITY * COALESCE(c.PESO_KG, 0) END), NULLIF(SUM(CASE WHEN c.FLAG_TOTABLE IS NOT TRUE THEN m.FBM_QUANTITY END), 0)), 3) AS KG_POR_UD_NO_TOTEABLE\n  FROM `your-project.source.STOCK_MOVEMENTS` m\n  LEFT JOIN CUBING c ON m.INVENTORY_ID = c.INVENTORY_ID\n  WHERE m.WAREHOUSE_ID = 'CD-01'\n    AND m.FBM_REASON_PROCESS = 'inbound'\n    AND m.ADDRESS_FROM IS NULL\n    AND m.ADDRESS_TO LIKE 'MU-%'\n    AND m.AUD_INS_DTTM >= DATETIME(TIMESTAMP(DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY), 'America/Santiago'))\n    AND m.AUD_INS_DTTM <  DATETIME(TIMESTAMP(DATE_ADD(CURRENT_DATE('America/Santiago'), INTERVAL 1 DAY), 'America/Santiago'))\n  GROUP BY FECHA, HORA\n),\n\n-- ================================================================\n-- BASE DE MOVIMIENTOS — auto-ajuste vía FN_API_TIMEZONE\n-- ================================================================\nBASE AS (\n  SELECT\n    DATE(`your-project.udf.FN_TIMEZONE`('MLC', FBM.AUD_INS_DTTM)) AS FECHA,\n    EXTRACT(HOUR FROM `your-project.udf.FN_TIMEZONE`('MLC', FBM.AUD_INS_DTTM)) AS HORA,\n    CAST(FBM.FBM_USER_ID AS STRING) AS OPERATOR_ID,\n    L.LDAP_USER, L.MANAGER_LDAP_USER,\n    CASE\n      WHEN L.MANAGER_LDAP_USER IN (SELECT LDAP_USER FROM `your-project.config.SUPERVISORES` WHERE TURNO = 'TM') THEN 'TM'\n      WHEN L.MANAGER_LDAP_USER IN (SELECT LDAP_USER FROM `your-project.config.SUPERVISORES` WHERE TURNO = 'TT') THEN 'TT'\n      WHEN L.MANAGER_LDAP_USER IN (SELECT LDAP_USER FROM `your-project.config.SUPERVISORES` WHERE TURNO = 'TN') THEN 'TN'\n      WHEN L.MANAGER_LDAP_USER IN (SELECT LDAP_USER FROM `your-project.config.SUPERVISORES` WHERE TURNO = 'PT') THEN 'PT'\n      ELSE 'PALANCA EXT'\n    END AS TURNO,\n    FBM.FBM_QUANTITY,\n    FBM.FBM_QUANTITY * C.VOL_LITROS AS VOL_TOTAL,\n    FBM.FBM_QUANTITY * C.PESO_KG AS PESO_TOTAL\n  FROM `your-project.source.STOCK_MOVEMENTS` FBM\n  INNER JOIN LDAPS L ON CAST(FBM.FBM_USER_ID AS STRING) = L.OPERATOR_ID\n  LEFT JOIN CUBING C ON FBM.INVENTORY_ID = C.INVENTORY_ID\n  WHERE FBM.WAREHOUSE_ID = 'CD-01'\n    AND FBM.FBM_REASON_PROCESS = 'inbound'\n    AND FBM.ADDRESS_FROM IS NULL\n    AND FBM.ADDRESS_TO LIKE 'MU-%'\n    AND FBM.AUD_INS_DTTM >= DATETIME(TIMESTAMP(DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY), 'America/Santiago'))\n    AND FBM.AUD_INS_DTTM <  DATETIME(TIMESTAMP(DATE_ADD(CURRENT_DATE('America/Santiago'), INTERVAL 1 DAY), 'America/Santiago'))\n    AND L.LDAP_USER NOT IN (SELECT LDAP_USER FROM `your-project.config.USUARIOS_EXCLUIDOS`)  -- supervisores, pruebas, etc.\n),\n\nREPS_CLASIFICADOS AS (\n  SELECT\n    b.FECHA, b.HORA, b.OPERATOR_ID,\n    CASE\n      WHEN b.TURNO = 'PALANCA EXT' THEN 'PALANCA EXT'\n      WHEN b.TURNO = 'PT' THEN 'PT'\n      ELSE\n        CASE\n          WHEN fd.FIRST_DAY IS NULL THEN 'NH1'\n          WHEN DATE_DIFF(DATE_TRUNC(b.FECHA, WEEK(SUNDAY)), DATE_TRUNC(fd.FIRST_DAY, WEEK(SUNDAY)), WEEK) = 0 THEN 'NH1'\n          WHEN DATE_DIFF(DATE_TRUNC(b.FECHA, WEEK(SUNDAY)), DATE_TRUNC(fd.FIRST_DAY, WEEK(SUNDAY)), WEEK) = 1 THEN 'NH2'\n          WHEN DATE_DIFF(DATE_TRUNC(b.FECHA, WEEK(SUNDAY)), DATE_TRUNC(fd.FIRST_DAY, WEEK(SUNDAY)), WEEK) = 2 THEN 'NH3'\n          ELSE 'NATIVO'\n        END\n    END AS TIPO_REP\n  FROM BASE b\n  LEFT JOIN first_day_chk fd ON fd.OPERATOR_ID = b.OPERATOR_ID\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY b.FECHA, b.HORA, b.OPERATOR_ID ORDER BY TIPO_REP) = 1\n),\n\nREP_SHARE AS (\n  SELECT\n    FECHA, HORA,\n    COUNT(*) AS TOTAL_REPS,\n    COUNTIF(TIPO_REP = 'NH1') AS N_NH1,\n    COUNTIF(TIPO_REP = 'NH2') AS N_NH2,\n    COUNTIF(TIPO_REP = 'NH3') AS N_NH3,\n    COUNTIF(TIPO_REP = 'NATIVO') AS N_NATIVO,\n    COUNTIF(TIPO_REP = 'PT') AS N_PT,\n    COUNTIF(TIPO_REP = 'PALANCA EXT') AS N_PALANCA_EXT,\n    ROUND(SAFE_DIVIDE(COUNTIF(TIPO_REP = 'NH1'), COUNT(*)) * 100, 1) AS PCT_NH1,\n    ROUND(SAFE_DIVIDE(COUNTIF(TIPO_REP = 'NH2'), COUNT(*)) * 100, 1) AS PCT_NH2,\n    ROUND(SAFE_DIVIDE(COUNTIF(TIPO_REP = 'NH3'), COUNT(*)) * 100, 1) AS PCT_NH3,\n    ROUND(SAFE_DIVIDE(COUNTIF(TIPO_REP = 'NATIVO'), COUNT(*)) * 100, 1) AS PCT_NATIVO,\n    ROUND(SAFE_DIVIDE(COUNTIF(TIPO_REP = 'PT'), COUNT(*)) * 100, 1) AS PCT_PT,\n    ROUND(SAFE_DIVIDE(COUNTIF(TIPO_REP = 'PALANCA EXT'), COUNT(*)) * 100, 1) AS PCT_PALANCA_EXT\n  FROM REPS_CLASIFICADOS\n  GROUP BY FECHA, HORA\n),\n\nREP_DIA AS (\n  SELECT\n    FECHA,\n    COUNT(DISTINCT OPERATOR_ID) AS TOTAL_REPS_DIA,\n    COUNT(DISTINCT CASE WHEN TIPO_REP = 'NH1' THEN OPERATOR_ID END) AS N_NH1_DIA,\n    COUNT(DISTINCT CASE WHEN TIPO_REP = 'NH2' THEN OPERATOR_ID END) AS N_NH2_DIA,\n    COUNT(DISTINCT CASE WHEN TIPO_REP = 'NH3' THEN OPERATOR_ID END) AS N_NH3_DIA,\n    COUNT(DISTINCT CASE WHEN TIPO_REP = 'NATIVO' THEN OPERATOR_ID END) AS N_NATIVO_DIA,\n    COUNT(DISTINCT CASE WHEN TIPO_REP = 'PT' THEN OPERATOR_ID END) AS N_PT_DIA,\n    COUNT(DISTINCT CASE WHEN TIPO_REP = 'PALANCA EXT' THEN OPERATOR_ID END) AS N_PALANCA_EXT_DIA,\n    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN TIPO_REP = 'NH1' THEN OPERATOR_ID END), COUNT(DISTINCT OPERATOR_ID)) * 100, 1) AS PCT_NH1_DIA,\n    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN TIPO_REP = 'NH2' THEN OPERATOR_ID END), COUNT(DISTINCT OPERATOR_ID)) * 100, 1) AS PCT_NH2_DIA,\n    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN TIPO_REP = 'NH3' THEN OPERATOR_ID END), COUNT(DISTINCT OPERATOR_ID)) * 100, 1) AS PCT_NH3_DIA,\n    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN TIPO_REP = 'NATIVO' THEN OPERATOR_ID END), COUNT(DISTINCT OPERATOR_ID)) * 100, 1) AS PCT_NATIVO_DIA,\n    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN TIPO_REP = 'PT' THEN OPERATOR_ID END), COUNT(DISTINCT OPERATOR_ID)) * 100, 1) AS PCT_PT_DIA,\n    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN TIPO_REP = 'PALANCA EXT' THEN OPERATOR_ID END), COUNT(DISTINCT OPERATOR_ID)) * 100, 1) AS PCT_PALANCA_EXT_DIA\n  FROM REPS_CLASIFICADOS\n  GROUP BY FECHA\n),\n\nPROD_CHK AS (\n  SELECT\n    START_DATE AS FECHA,\n    EXTRACT(HOUR FROM START_TIME) AS HORA,\n    SUM(UNITS) AS UDS_CHECKIN\n  FROM `your-project.source.EMPLOYEE_ATTRIBUTES`\n  WHERE LOGISTIC_CENTER_ID = 'CD-01'\n    AND SUBPROCESS = 'checkin'\n    AND START_DATE >= DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY)\n    AND START_DATE <= CURRENT_DATE('America/Santiago')\n    AND OPERATOR_ID IS NOT NULL\n  GROUP BY FECHA, HORA\n),\n\nVOLUMETRIA AS (\n  SELECT\n    FECHA, HORA,\n    ROUND(SUM(VOL_TOTAL), 2) AS VOL_L_TOTAL,\n    ROUND(SAFE_DIVIDE(SUM(VOL_TOTAL), SUM(CASE WHEN VOL_TOTAL IS NOT NULL THEN FBM_QUANTITY END)), 3) AS L_POR_UD,\n    ROUND(SAFE_DIVIDE(SUM(PESO_TOTAL), SUM(FBM_QUANTITY)), 3) AS KG_POR_UD\n  FROM BASE\n  GROUP BY FECHA, HORA\n),\n\n-- ================================================================\n-- PESO Y VOLUMEN POR TOTE — auto-ajuste vía FN_API_TIMEZONE\n-- ================================================================\nTOTE_PESO AS (\n  SELECT\n    DATE(`your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS FECHA,\n    EXTRACT(HOUR FROM `your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS HORA,\n    m.ADDRESS_TO AS tote_address,\n    SUM(CAST(m.FBM_QUANTITY AS FLOAT64) * COALESCE(c.PESO_KG, 0)) AS tote_weight_kg,\n    SUM(CAST(m.FBM_QUANTITY AS FLOAT64) * c.VOL_LITROS) AS tote_vol_litros\n  FROM `your-project.source.STOCK_MOVEMENTS` m\n  INNER JOIN OPS_CHK ops\n    ON ops.OPERATOR_ID = CAST(m.FBM_USER_ID AS STRING)\n   AND ops.FECHA = DATE(`your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM))\n  INNER JOIN CUBING c ON m.INVENTORY_ID = c.INVENTORY_ID AND c.FLAG_TOTABLE IS TRUE\n  WHERE m.WAREHOUSE_ID = 'CD-01'\n    AND m.FBM_REASON_PROCESS = 'inbound'\n    AND m.ADDRESS_FROM IS NULL\n    AND m.ADDRESS_TO LIKE 'MU-%'\n    AND m.AUD_INS_DTTM >= DATETIME(TIMESTAMP(DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY), 'America/Santiago'))\n    AND m.AUD_INS_DTTM <  DATETIME(TIMESTAMP(DATE_ADD(CURRENT_DATE('America/Santiago'), INTERVAL 1 DAY), 'America/Santiago'))\n  GROUP BY FECHA, HORA, tote_address\n),\n\nTOTE_BINS AS (\n  SELECT\n    FECHA, HORA,\n    COUNT(*) AS TOTAL_TOTES,\n    ROUND(AVG(tote_weight_kg), 2) AS KG_POR_TOTE_AVG,\n    ROUND(SUM(tote_weight_kg), 2) AS KG_TOTAL_TOTES,\n    COUNTIF(tote_weight_kg > 0 AND tote_weight_kg <= 2) AS N_TOTES_0_2,\n    COUNTIF(tote_weight_kg > 2 AND tote_weight_kg <= 4) AS N_TOTES_2_4,\n    COUNTIF(tote_weight_kg > 4 AND tote_weight_kg <= 6) AS N_TOTES_4_6,\n    COUNTIF(tote_weight_kg > 6 AND tote_weight_kg <= 8) AS N_TOTES_6_8,\n    COUNTIF(tote_weight_kg > 8 AND tote_weight_kg <= 10) AS N_TOTES_8_10,\n    COUNTIF(tote_weight_kg > 10 AND tote_weight_kg <= 12) AS N_TOTES_10_12,\n    COUNTIF(tote_weight_kg > 12 AND tote_weight_kg <= 16) AS N_TOTES_12_16,\n    COUNTIF(tote_weight_kg > 16) AS N_TOTES_16_MAS,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 0 AND tote_weight_kg <= 2), COUNT(*)) * 100, 1) AS PCT_TOTES_0_2,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 2 AND tote_weight_kg <= 4), COUNT(*)) * 100, 1) AS PCT_TOTES_2_4,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 4 AND tote_weight_kg <= 6), COUNT(*)) * 100, 1) AS PCT_TOTES_4_6,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 6 AND tote_weight_kg <= 8), COUNT(*)) * 100, 1) AS PCT_TOTES_6_8,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 8 AND tote_weight_kg <= 10), COUNT(*)) * 100, 1) AS PCT_TOTES_8_10,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 10 AND tote_weight_kg <= 12), COUNT(*)) * 100, 1) AS PCT_TOTES_10_12,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 12 AND tote_weight_kg <= 16), COUNT(*)) * 100, 1) AS PCT_TOTES_12_16,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 16), COUNT(*)) * 100, 1) AS PCT_TOTES_16_MAS,\n    ROUND(AVG(LEAST(SAFE_DIVIDE(COALESCE(tote_vol_litros, 0), 51.408) * 100, 100.0)), 1) AS PCT_VOL_FULL_AVG,\n    ROUND(AVG(LEAST(SAFE_DIVIDE(tote_weight_kg, 15.0) * 100, 100.0)), 1) AS PCT_PESO_FULL_AVG,\n    ROUND(AVG(LEAST(GREATEST(SAFE_DIVIDE(COALESCE(tote_vol_litros, 0), 51.408), SAFE_DIVIDE(tote_weight_kg, 15.0)) * 100, 100.0)), 1) AS PCT_SATURA_FULL_AVG\n  FROM TOTE_PESO\n  GROUP BY FECHA, HORA\n),\n\nCHECKIN_BASE AS (\n  SELECT\n    rs.FECHA, rs.HORA,\n    rs.TOTAL_REPS, rs.N_NH1, rs.N_NH2, rs.N_NH3, rs.N_NATIVO, rs.N_PT, rs.N_PALANCA_EXT,\n    rs.PCT_NH1, rs.PCT_NH2, rs.PCT_NH3, rs.PCT_NATIVO, rs.PCT_PT, rs.PCT_PALANCA_EXT,\n    rd.TOTAL_REPS_DIA, rd.N_NH1_DIA, rd.N_NH2_DIA, rd.N_NH3_DIA, rd.N_NATIVO_DIA, rd.N_PT_DIA, rd.N_PALANCA_EXT_DIA,\n    rd.PCT_NH1_DIA, rd.PCT_NH2_DIA, rd.PCT_NH3_DIA, rd.PCT_NATIVO_DIA, rd.PCT_PT_DIA, rd.PCT_PALANCA_EXT_DIA,\n    COALESCE(p.UDS_CHECKIN, 0) AS UDS_CHECKIN,\n    v.VOL_L_TOTAL, v.L_POR_UD, v.KG_POR_UD,\n    vr.L_POR_UD_TOTEABLE, vr.L_POR_UD_NO_TOTEABLE, vr.KG_POR_UD_TOTEABLE, vr.KG_POR_UD_NO_TOTEABLE,\n    CAST(ROUND(COALESCE(p.UDS_CHECKIN, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) AS UDS_TOTEABLE,\n    COALESCE(p.UDS_CHECKIN, 0) - CAST(ROUND(COALESCE(p.UDS_CHECKIN, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) AS UDS_NO_TOTEABLE,\n    CAST(ROUND(CAST(ROUND(COALESCE(p.UDS_CHECKIN, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_XS, 0)) AS INT64) AS UDS_XS,\n    CAST(ROUND(CAST(ROUND(COALESCE(p.UDS_CHECKIN, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_S, 0)) AS INT64) AS UDS_S,\n    CAST(ROUND(CAST(ROUND(COALESCE(p.UDS_CHECKIN, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_M, 0)) AS INT64) AS UDS_M,\n    CAST(ROUND(CAST(ROUND(COALESCE(p.UDS_CHECKIN, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_L, 0)) AS INT64) AS UDS_L,\n    CAST(ROUND(COALESCE(p.UDS_CHECKIN, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64)\n      - CAST(ROUND(CAST(ROUND(COALESCE(p.UDS_CHECKIN, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_XS, 0)) AS INT64)\n      - CAST(ROUND(CAST(ROUND(COALESCE(p.UDS_CHECKIN, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_S, 0)) AS INT64)\n      - CAST(ROUND(CAST(ROUND(COALESCE(p.UDS_CHECKIN, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_M, 0)) AS INT64)\n      - CAST(ROUND(CAST(ROUND(COALESCE(p.UDS_CHECKIN, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_L, 0)) AS INT64) AS UDS_XL,\n    COALESCE(tb.TOTAL_TOTES, 0) AS TOTAL_TOTES,\n    tb.KG_POR_TOTE_AVG, tb.KG_TOTAL_TOTES,\n    COALESCE(tb.N_TOTES_0_2, 0) AS N_TOTES_0_2,\n    COALESCE(tb.N_TOTES_2_4, 0) AS N_TOTES_2_4,\n    COALESCE(tb.N_TOTES_4_6, 0) AS N_TOTES_4_6,\n    COALESCE(tb.N_TOTES_6_8, 0) AS N_TOTES_6_8,\n    COALESCE(tb.N_TOTES_8_10, 0) AS N_TOTES_8_10,\n    COALESCE(tb.N_TOTES_10_12, 0) AS N_TOTES_10_12,\n    COALESCE(tb.N_TOTES_12_16, 0) AS N_TOTES_12_16,\n    COALESCE(tb.N_TOTES_16_MAS, 0) AS N_TOTES_16_MAS,\n    tb.PCT_TOTES_0_2, tb.PCT_TOTES_2_4, tb.PCT_TOTES_4_6, tb.PCT_TOTES_6_8,\n    tb.PCT_TOTES_8_10, tb.PCT_TOTES_10_12, tb.PCT_TOTES_12_16, tb.PCT_TOTES_16_MAS,\n    tb.PCT_VOL_FULL_AVG, tb.PCT_PESO_FULL_AVG, tb.PCT_SATURA_FULL_AVG\n  FROM REP_SHARE rs\n  LEFT JOIN REP_DIA rd ON rd.FECHA = rs.FECHA\n  LEFT JOIN PROD_CHK p ON p.FECHA = rs.FECHA AND p.HORA = rs.HORA\n  LEFT JOIN VOLUMETRIA v ON v.FECHA = rs.FECHA AND v.HORA = rs.HORA\n  LEFT JOIN VOL_RATIO vr ON vr.FECHA = rs.FECHA AND vr.HORA = rs.HORA\n  LEFT JOIN TOT_FLAG tf ON tf.FECHA = rs.FECHA AND tf.HORA = rs.HORA\n  LEFT JOIN TOTE_LMS tl ON tl.FECHA = rs.FECHA AND tl.HORA = rs.HORA\n  LEFT JOIN TOTE_BINS tb ON tb.FECHA = rs.FECHA AND tb.HORA = rs.HORA\n)\n\nSELECT\n  *,\n  ROUND(SAFE_DIVIDE(UDS_TOTEABLE, NULLIF(UDS_CHECKIN, 0)) * 100, 1) AS PCT_TOTEABLE,\n  ROUND(SAFE_DIVIDE(UDS_XS, NULLIF(UDS_TOTEABLE, 0)) * 100, 1) AS PCT_TOTE_XS,\n  ROUND(SAFE_DIVIDE(UDS_S,  NULLIF(UDS_TOTEABLE, 0)) * 100, 1) AS PCT_TOTE_S,\n  ROUND(SAFE_DIVIDE(UDS_M,  NULLIF(UDS_TOTEABLE, 0)) * 100, 1) AS PCT_TOTE_M,\n  ROUND(SAFE_DIVIDE(UDS_L,  NULLIF(UDS_TOTEABLE, 0)) * 100, 1) AS PCT_TOTE_L,\n  ROUND(SAFE_DIVIDE(UDS_XL, NULLIF(UDS_TOTEABLE, 0)) * 100, 1) AS PCT_TOTE_XL\nFROM CHECKIN_BASE\nORDER BY FECHA, HORA;",
+        "options": {}
+      },
+      "id": "221e7281-5e0f-480f-b575-25438af9b056",
+      "name": "PEAK_CHECKIN_HORA",
+      "type": "n8n-nodes-base.googleBigQuery",
+      "position": [
+        -80,
+        -864
+      ],
+      "typeVersion": 2.1,
+      "retryOnFail": true,
+      "credentials": {
+        "googleGenericOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google BigQuery OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "projectId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "=YOUR_GCP_PROJECT_ID"
+        },
+        "sqlQuery": "-- ================================================================\n-- DCI_HORA — versión con auto-ajuste de horario (DST-safe)\n-- Mismo criterio que CHECKIN_HORA_AUTOADJUST.sql: reemplaza el\n-- parche fijo \"+1 HORA\" por FN_API_TIMEZONE en todas las CTEs que\n-- leen STOCK_MOVEMENTS / OPERATOR_EVENTS.\n-- ================================================================\nCREATE OR REPLACE TABLE `your-project.analytics.DCI_HORA` AS\n\nWITH\n\nfirst_day_dci AS (\n  SELECT\n    CAST(EMPLOYEE_ID AS STRING) AS OPERATOR_ID,\n    MIN(FIRST_OPS_DAY) AS FIRST_DAY\n  FROM `your-project.source.ATTENDANCE`\n  WHERE FACILITY_ID = 'CD-01'\n    AND SITE_ID = 'MLC'\n    AND FIRST_OPS_DAY IS NOT NULL\n  GROUP BY 1\n),\n\nATT_PT AS (\n  SELECT\n    DATE(WORK_START_DATE) AS FECHA,\n    CAST(USER_ID AS STRING) AS OPERATOR_ID,\n    MAX(\n      CASE\n        WHEN REGEXP_CONTAINS(UPPER(COALESCE(SCHEDULE_NAME, '')), r'PTO') THEN 0\n        WHEN REGEXP_CONTAINS(UPPER(COALESCE(SCHEDULE_NAME, '')), r'(^PT)|(\\bPT\\b)|(PT$)|(XDPT)|(PT[0-9])')\n          OR REGEXP_CONTAINS(UPPER(COALESCE(SCHEDULE_DESCRIPTION, '')), r'(^PT)|(\\bPT\\b)|(PT$)|(XDPT)|(PT[0-9])')\n        THEN 1\n        ELSE 0\n      END\n    ) AS IS_PT\n  FROM `your-project.source.ATTENDANCE`\n  WHERE SITE_ID = 'MLC'\n    AND FACILITY_ID = 'CD-01'\n    AND DATE(WORK_START_DATE) >= DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY)\n    AND DATE(WORK_START_DATE) <= CURRENT_DATE('America/Santiago')\n    AND USER_ID IS NOT NULL\n  GROUP BY FECHA, OPERATOR_ID\n),\n\nPROCESO_PRINCIPAL AS (\n  SELECT\n    OPERATOR_ID,\n    PROCESS AS PROCESO_PRINCIPAL\n  FROM (\n    SELECT\n      CAST(OPERATOR_ID AS STRING) AS OPERATOR_ID,\n      PROCESS,\n      SUM(COALESCE(PROCESS_DURATION, 0)) AS HH_PROCESO\n    FROM `your-project.source.EMPLOYEE_ATTRIBUTES`\n    WHERE LOGISTIC_CENTER_ID = 'CD-01'\n      AND START_DATE >= DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY)\n      AND OPERATOR_ID IS NOT NULL\n    GROUP BY OPERATOR_ID, PROCESS\n  )\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY OPERATOR_ID ORDER BY HH_PROCESO DESC) = 1\n),\n\nCUBING AS (\n  SELECT\n    INVENTORY_ID,\n    COALESCE(\n      ITE_VOLUMEN,\n      CASE\n        WHEN ITE_HEIGHT > 0 AND ITE_LENGTH > 0 AND ITE_WIDTH > 0\n        THEN ITE_HEIGHT * ITE_LENGTH * ITE_WIDTH / 1000.0\n        ELSE NULL\n      END\n    ) AS VOL_LITROS,\n    CASE\n      WHEN FLAG_TOTABLE = TRUE OR TOTABILITY = 'TOTABLE' THEN TRUE\n      ELSE FALSE\n    END AS FLAG_TOTABLE,\n    CASE\n      WHEN UPPER(COALESCE(ITE_WEIGHT_UNIT, '')) IN ('G', 'GR', 'GRAM', 'GRAMS')\n      THEN SAFE_DIVIDE(ITE_WEIGHT, 1000.0)\n      ELSE ITE_WEIGHT\n    END AS PESO_KG,\n    CASE\n      WHEN ITE_VOLUMEN IS NOT NULL AND ITE_VOLUMEN > 0 THEN 'ITE_VOLUMEN'\n      WHEN ITE_HEIGHT > 0 AND ITE_LENGTH > 0 AND ITE_WIDTH > 0 THEN 'CALCULADO'\n      ELSE 'SIN_VOLUMETRIA'\n    END AS FUENTE_VOLUMEN\n  FROM `your-project.source.SKU_DETAILS`\n  WHERE LOGISTIC_CENTER_ID = 'CD-01'\n    AND SIT_SITE_ID = 'MLC'\n  QUALIFY ROW_NUMBER() OVER (\n    PARTITION BY INVENTORY_ID\n    ORDER BY (ITE_VOLUMEN IS NOT NULL) DESC, (ITE_HEIGHT IS NOT NULL) DESC\n  ) = 1\n),\n\nOPS_DCI AS (\n  SELECT DISTINCT\n    CAST(OPERATOR_ID AS STRING) AS OPERATOR_ID,\n    DATE(START_DATE) AS FECHA\n  FROM `your-project.source.OPERATOR_PRODUCTIVITY`\n  WHERE AREA = 'inbound'\n    AND PROCESS = 'direct_checkin'\n    AND DATE(START_DATE) >= DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY)\n    AND LOGISTIC_CENTER_ID = 'CD-01'\n    AND SITE_ID = 'MLC'\n),\n\n-- ================================================================\n-- TOTE FLAG — auto-ajuste vía FN_API_TIMEZONE\n-- ================================================================\nTOT_FLAG AS (\n  SELECT\n    DATE(`your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS FECHA,\n    EXTRACT(HOUR FROM `your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS HORA,\n    ROUND(\n      SAFE_DIVIDE(\n        SUM(CASE WHEN c.FLAG_TOTABLE IS TRUE THEN m.FBM_QUANTITY ELSE 0 END),\n        NULLIF(SUM(m.FBM_QUANTITY), 0)\n      ), 6\n    ) AS PCT_TOTEABLE\n  FROM `your-project.source.STOCK_MOVEMENTS` m\n  INNER JOIN OPS_DCI ops\n    ON ops.OPERATOR_ID = CAST(m.FBM_USER_ID AS STRING)\n   AND ops.FECHA = DATE(`your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM))\n  LEFT JOIN CUBING c ON m.INVENTORY_ID = c.INVENTORY_ID\n  WHERE m.WAREHOUSE_ID = 'CD-01'\n    AND m.FBM_REASON_PROCESS = 'inbound'\n    AND m.ADDRESS_FROM IS NULL\n    AND m.ADDRESS_TO LIKE 'MU-%'\n    AND m.AUD_INS_DTTM >= DATETIME(TIMESTAMP(DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY), 'America/Santiago'))\n    AND m.AUD_INS_DTTM <  DATETIME(TIMESTAMP(DATE_ADD(CURRENT_DATE('America/Santiago'), INTERVAL 1 DAY), 'America/Santiago'))\n  GROUP BY FECHA, HORA\n),\n\n-- ================================================================\n-- TOTE LMS — auto-ajuste vía FN_API_TIMEZONE\n-- ================================================================\nTOTE_LMS AS (\n  SELECT\n    DATE(`your-project.udf.FN_TIMEZONE`('MLC', EVENT_DATE)) AS FECHA,\n    EXTRACT(HOUR FROM `your-project.udf.FN_TIMEZONE`('MLC', EVENT_DATE)) AS HORA,\n    ROUND(SAFE_DIVIDE(COUNTIF(UPPER(JSON_VALUE(ATTRIBUTES, '$.tote_size')) = 'XS'), NULLIF(COUNTIF(JSON_VALUE(ATTRIBUTES, '$.tote_size') IS NOT NULL), 0)), 6) AS PCT_XS,\n    ROUND(SAFE_DIVIDE(COUNTIF(UPPER(JSON_VALUE(ATTRIBUTES, '$.tote_size')) = 'S'),  NULLIF(COUNTIF(JSON_VALUE(ATTRIBUTES, '$.tote_size') IS NOT NULL), 0)), 6) AS PCT_S,\n    ROUND(SAFE_DIVIDE(COUNTIF(UPPER(JSON_VALUE(ATTRIBUTES, '$.tote_size')) = 'M'),  NULLIF(COUNTIF(JSON_VALUE(ATTRIBUTES, '$.tote_size') IS NOT NULL), 0)), 6) AS PCT_M,\n    ROUND(SAFE_DIVIDE(COUNTIF(UPPER(JSON_VALUE(ATTRIBUTES, '$.tote_size')) = 'L'),  NULLIF(COUNTIF(JSON_VALUE(ATTRIBUTES, '$.tote_size') IS NOT NULL), 0)), 6) AS PCT_L,\n    ROUND(SAFE_DIVIDE(COUNTIF(UPPER(JSON_VALUE(ATTRIBUTES, '$.tote_size')) = 'XL'), NULLIF(COUNTIF(JSON_VALUE(ATTRIBUTES, '$.tote_size') IS NOT NULL), 0)), 6) AS PCT_XL\n  FROM `your-project.source.OPERATOR_EVENTS`\n  WHERE FACILITY = 'CD-01'\n    AND PROCESS = 'direct_checkin'\n    AND JSON_VALUE(ATTRIBUTES, '$.tote_size') IS NOT NULL\n    AND EVENT_DATE >= DATETIME(TIMESTAMP(DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY), 'America/Santiago'))\n    AND EVENT_DATE <  DATETIME(TIMESTAMP(DATE_ADD(CURRENT_DATE('America/Santiago'), INTERVAL 1 DAY), 'America/Santiago'))\n  GROUP BY FECHA, HORA\n),\n\n-- ================================================================\n-- VOLUMETRÍA Y PESO POR HORA — auto-ajuste vía FN_API_TIMEZONE\n-- ================================================================\nVOL_RATIO AS (\n  SELECT\n    DATE(`your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS FECHA,\n    EXTRACT(HOUR FROM `your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS HORA,\n    ROUND(SAFE_DIVIDE(SUM(CASE WHEN c.FLAG_TOTABLE IS TRUE AND c.VOL_LITROS IS NOT NULL THEN m.FBM_QUANTITY * c.VOL_LITROS END), NULLIF(SUM(CASE WHEN c.FLAG_TOTABLE IS TRUE AND c.VOL_LITROS IS NOT NULL THEN m.FBM_QUANTITY END), 0)), 3) AS L_POR_UD_TOTEABLE,\n    ROUND(SAFE_DIVIDE(SUM(CASE WHEN c.FLAG_TOTABLE IS NOT TRUE AND c.VOL_LITROS IS NOT NULL THEN m.FBM_QUANTITY * c.VOL_LITROS END), NULLIF(SUM(CASE WHEN c.FLAG_TOTABLE IS NOT TRUE AND c.VOL_LITROS IS NOT NULL THEN m.FBM_QUANTITY END), 0)), 3) AS L_POR_UD_NO_TOTEABLE,\n    ROUND(SAFE_DIVIDE(SUM(CASE WHEN c.FLAG_TOTABLE IS TRUE THEN m.FBM_QUANTITY * COALESCE(c.PESO_KG, 0) END), NULLIF(SUM(CASE WHEN c.FLAG_TOTABLE IS TRUE THEN m.FBM_QUANTITY END), 0)), 3) AS KG_POR_UD_TOTEABLE,\n    ROUND(SAFE_DIVIDE(SUM(CASE WHEN c.FLAG_TOTABLE IS NOT TRUE THEN m.FBM_QUANTITY * COALESCE(c.PESO_KG, 0) END), NULLIF(SUM(CASE WHEN c.FLAG_TOTABLE IS NOT TRUE THEN m.FBM_QUANTITY END), 0)), 3) AS KG_POR_UD_NO_TOTEABLE\n  FROM `your-project.source.STOCK_MOVEMENTS` m\n  LEFT JOIN CUBING c ON m.INVENTORY_ID = c.INVENTORY_ID\n  WHERE m.WAREHOUSE_ID = 'CD-01'\n    AND m.FBM_REASON_PROCESS = 'inbound'\n    AND m.ADDRESS_FROM IS NULL\n    AND m.ADDRESS_TO LIKE 'MU-%'\n    AND m.AUD_INS_DTTM >= DATETIME(TIMESTAMP(DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY), 'America/Santiago'))\n    AND m.AUD_INS_DTTM <  DATETIME(TIMESTAMP(DATE_ADD(CURRENT_DATE('America/Santiago'), INTERVAL 1 DAY), 'America/Santiago'))\n  GROUP BY FECHA, HORA\n),\n\nBASE_DCI AS (\n  SELECT\n    p.START_DATE AS FECHA,\n    CAST(p.OPERATOR_ID AS STRING) AS OPERATOR_ID,\n    p.LDAP_USER,\n    SUM(p.UNITS) AS UNITS_PROCESSED\n  FROM `your-project.source.OPERATOR_PRODUCTIVITY` p\n  WHERE p.LOGISTIC_CENTER_ID = 'CD-01'\n    AND p.AREA = 'inbound'\n    AND p.PROCESS = 'direct_checkin'\n    AND p.START_DATE >= DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY)\n    AND p.START_DATE <= CURRENT_DATE('America/Santiago')\n    AND p.LDAP_USER IS NOT NULL\n    AND p.LDAP_USER NOT IN (SELECT LDAP_USER FROM `your-project.config.USUARIOS_EXCLUIDOS`)  -- supervisores, pruebas, etc.\n  GROUP BY FECHA, OPERATOR_ID, LDAP_USER\n),\n\n-- ================================================================\n-- ACTIVIDAD HORA — auto-ajuste vía FN_API_TIMEZONE\n-- ================================================================\nACTIVIDAD_HORA AS (\n  SELECT\n    DATE(`your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS FECHA,\n    EXTRACT(HOUR FROM `your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS HORA,\n    CAST(m.FBM_USER_ID AS STRING) AS OPERATOR_ID\n  FROM `your-project.source.STOCK_MOVEMENTS` m\n  INNER JOIN BASE_DCI bp\n    ON bp.OPERATOR_ID = CAST(m.FBM_USER_ID AS STRING)\n   AND bp.FECHA = DATE(`your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM))\n  WHERE m.WAREHOUSE_ID = 'CD-01'\n    AND m.FBM_REASON_PROCESS = 'inbound'\n    AND m.ADDRESS_FROM IS NULL\n    AND m.ADDRESS_TO LIKE 'MU-%'\n    AND m.AUD_INS_DTTM >= DATETIME(TIMESTAMP(DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY), 'America/Santiago'))\n    AND m.AUD_INS_DTTM <  DATETIME(TIMESTAMP(DATE_ADD(CURRENT_DATE('America/Santiago'), INTERVAL 1 DAY), 'America/Santiago'))\n  GROUP BY FECHA, HORA, OPERATOR_ID\n),\n\n-- ================================================================\n-- MOVIMIENTOS VOL — auto-ajuste vía FN_API_TIMEZONE\n-- ================================================================\nMOVIMIENTOS_VOL AS (\n  SELECT\n    DATE(`your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS FECHA,\n    EXTRACT(HOUR FROM `your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS HORA,\n    CAST(m.FBM_USER_ID AS STRING) AS OPERATOR_ID,\n    SUM(m.FBM_QUANTITY) AS UDS_MOV,\n    SUM(m.FBM_QUANTITY * c.VOL_LITROS) AS VOL_TOTAL,\n    SUM(m.FBM_QUANTITY * COALESCE(c.PESO_KG, 0)) AS PESO_TOTAL,\n    SUM(CASE WHEN c.VOL_LITROS IS NOT NULL THEN m.FBM_QUANTITY ELSE 0 END) AS UDS_CON_VOL,\n    SUM(CASE WHEN c.VOL_LITROS IS NULL THEN m.FBM_QUANTITY ELSE 0 END) AS UDS_SIN_VOL\n  FROM `your-project.source.STOCK_MOVEMENTS` m\n  LEFT JOIN CUBING c ON m.INVENTORY_ID = c.INVENTORY_ID\n  WHERE m.WAREHOUSE_ID = 'CD-01'\n    AND m.FBM_REASON_PROCESS = 'inbound'\n    AND m.ADDRESS_FROM IS NULL\n    AND m.ADDRESS_TO LIKE 'MU-%'\n    AND m.AUD_INS_DTTM >= DATETIME(TIMESTAMP(DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY), 'America/Santiago'))\n    AND m.AUD_INS_DTTM <  DATETIME(TIMESTAMP(DATE_ADD(CURRENT_DATE('America/Santiago'), INTERVAL 1 DAY), 'America/Santiago'))\n  GROUP BY FECHA, HORA, OPERATOR_ID\n),\n\nMOVIMIENTOS_VOL_DIA AS (\n  SELECT\n    FECHA, OPERATOR_ID,\n    SUM(UDS_MOV) AS UDS_MOV_DIA,\n    SUM(UDS_SIN_VOL) AS UDS_SIN_VOL_DIA\n  FROM MOVIMIENTOS_VOL\n  GROUP BY FECHA, OPERATOR_ID\n),\n\nBASE AS (\n  SELECT\n    ah.FECHA, ah.HORA, ah.OPERATOR_ID,\n    bp.LDAP_USER, bp.UNITS_PROCESSED,\n    COALESCE(mv.UDS_MOV, 0) AS UDS_MOV,\n    COALESCE(mvd.UDS_MOV_DIA, 0) AS UDS_MOV_DIA,\n    mv.VOL_TOTAL,\n    COALESCE(mv.PESO_TOTAL, 0) AS PESO_TOTAL,\n    COALESCE(mv.UDS_CON_VOL, 0) AS UDS_CON_VOL,\n    COALESCE(mv.UDS_SIN_VOL, 0) AS UDS_SIN_VOL\n  FROM ACTIVIDAD_HORA ah\n  LEFT JOIN BASE_DCI bp ON bp.FECHA = ah.FECHA AND bp.OPERATOR_ID = ah.OPERATOR_ID\n  LEFT JOIN MOVIMIENTOS_VOL mv ON mv.FECHA = ah.FECHA AND mv.HORA = ah.HORA AND mv.OPERATOR_ID = ah.OPERATOR_ID\n  LEFT JOIN MOVIMIENTOS_VOL_DIA mvd ON mvd.FECHA = ah.FECHA AND mvd.OPERATOR_ID = ah.OPERATOR_ID\n),\n\nREPS_CLASIFICADOS AS (\n  SELECT\n    b.FECHA, b.HORA, b.OPERATOR_ID,\n    CASE\n      WHEN pp.PROCESO_PRINCIPAL != 'direct_checkin' THEN 'PALANCA EXT'\n      WHEN att.IS_PT = 1 THEN 'PT'\n      ELSE\n        CASE\n          WHEN fd.FIRST_DAY IS NULL THEN 'NH1'\n          WHEN DATE_DIFF(DATE_TRUNC(b.FECHA, WEEK(SUNDAY)), DATE_TRUNC(fd.FIRST_DAY, WEEK(SUNDAY)), WEEK) = 0 THEN 'NH1'\n          WHEN DATE_DIFF(DATE_TRUNC(b.FECHA, WEEK(SUNDAY)), DATE_TRUNC(fd.FIRST_DAY, WEEK(SUNDAY)), WEEK) = 1 THEN 'NH2'\n          WHEN DATE_DIFF(DATE_TRUNC(b.FECHA, WEEK(SUNDAY)), DATE_TRUNC(fd.FIRST_DAY, WEEK(SUNDAY)), WEEK) = 2 THEN 'NH3'\n          ELSE 'NATIVO'\n        END\n    END AS TIPO_REP\n  FROM BASE b\n  LEFT JOIN PROCESO_PRINCIPAL pp ON pp.OPERATOR_ID = b.OPERATOR_ID\n  LEFT JOIN ATT_PT att ON att.OPERATOR_ID = b.OPERATOR_ID AND att.FECHA = b.FECHA\n  LEFT JOIN first_day_dci fd ON fd.OPERATOR_ID = b.OPERATOR_ID\n  QUALIFY ROW_NUMBER() OVER (PARTITION BY b.FECHA, b.HORA, b.OPERATOR_ID ORDER BY TIPO_REP) = 1\n),\n\nREP_SHARE AS (\n  SELECT\n    FECHA, HORA,\n    COUNT(*) AS TOTAL_REPS,\n    COUNTIF(TIPO_REP = 'NH1') AS N_NH1,\n    COUNTIF(TIPO_REP = 'NH2') AS N_NH2,\n    COUNTIF(TIPO_REP = 'NH3') AS N_NH3,\n    COUNTIF(TIPO_REP = 'NATIVO') AS N_NATIVO,\n    COUNTIF(TIPO_REP = 'PT') AS N_PT,\n    COUNTIF(TIPO_REP = 'PALANCA EXT') AS N_PALANCA_EXT,\n    ROUND(SAFE_DIVIDE(COUNTIF(TIPO_REP = 'NH1'), COUNT(*)) * 100, 1) AS PCT_NH1,\n    ROUND(SAFE_DIVIDE(COUNTIF(TIPO_REP = 'NH2'), COUNT(*)) * 100, 1) AS PCT_NH2,\n    ROUND(SAFE_DIVIDE(COUNTIF(TIPO_REP = 'NH3'), COUNT(*)) * 100, 1) AS PCT_NH3,\n    ROUND(SAFE_DIVIDE(COUNTIF(TIPO_REP = 'NATIVO'), COUNT(*)) * 100, 1) AS PCT_NATIVO,\n    ROUND(SAFE_DIVIDE(COUNTIF(TIPO_REP = 'PT'), COUNT(*)) * 100, 1) AS PCT_PT,\n    ROUND(SAFE_DIVIDE(COUNTIF(TIPO_REP = 'PALANCA EXT'), COUNT(*)) * 100, 1) AS PCT_PALANCA_EXT\n  FROM REPS_CLASIFICADOS\n  GROUP BY FECHA, HORA\n),\n\nREP_DIA AS (\n  SELECT\n    FECHA,\n    COUNT(DISTINCT OPERATOR_ID) AS TOTAL_REPS_DIA,\n    COUNT(DISTINCT CASE WHEN TIPO_REP = 'NH1' THEN OPERATOR_ID END) AS N_NH1_DIA,\n    COUNT(DISTINCT CASE WHEN TIPO_REP = 'NH2' THEN OPERATOR_ID END) AS N_NH2_DIA,\n    COUNT(DISTINCT CASE WHEN TIPO_REP = 'NH3' THEN OPERATOR_ID END) AS N_NH3_DIA,\n    COUNT(DISTINCT CASE WHEN TIPO_REP = 'NATIVO' THEN OPERATOR_ID END) AS N_NATIVO_DIA,\n    COUNT(DISTINCT CASE WHEN TIPO_REP = 'PT' THEN OPERATOR_ID END) AS N_PT_DIA,\n    COUNT(DISTINCT CASE WHEN TIPO_REP = 'PALANCA EXT' THEN OPERATOR_ID END) AS N_PALANCA_EXT_DIA,\n    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN TIPO_REP = 'NH1' THEN OPERATOR_ID END), COUNT(DISTINCT OPERATOR_ID)) * 100, 1) AS PCT_NH1_DIA,\n    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN TIPO_REP = 'NH2' THEN OPERATOR_ID END), COUNT(DISTINCT OPERATOR_ID)) * 100, 1) AS PCT_NH2_DIA,\n    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN TIPO_REP = 'NH3' THEN OPERATOR_ID END), COUNT(DISTINCT OPERATOR_ID)) * 100, 1) AS PCT_NH3_DIA,\n    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN TIPO_REP = 'NATIVO' THEN OPERATOR_ID END), COUNT(DISTINCT OPERATOR_ID)) * 100, 1) AS PCT_NATIVO_DIA,\n    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN TIPO_REP = 'PT' THEN OPERATOR_ID END), COUNT(DISTINCT OPERATOR_ID)) * 100, 1) AS PCT_PT_DIA,\n    ROUND(SAFE_DIVIDE(COUNT(DISTINCT CASE WHEN TIPO_REP = 'PALANCA EXT' THEN OPERATOR_ID END), COUNT(DISTINCT OPERATOR_ID)) * 100, 1) AS PCT_PALANCA_EXT_DIA\n  FROM REPS_CLASIFICADOS\n  GROUP BY FECHA\n),\n\nVOLUMETRIA AS (\n  SELECT\n    FECHA, HORA,\n    ROUND(SUM(SAFE_DIVIDE(CAST(UNITS_PROCESSED AS FLOAT64) * UDS_MOV, NULLIF(UDS_MOV_DIA, 0)))) AS UDS_DCI,\n    ROUND(SUM(VOL_TOTAL), 2) AS VOL_L_TOTAL,\n    ROUND(SAFE_DIVIDE(SUM(VOL_TOTAL), SUM(CASE WHEN VOL_TOTAL IS NOT NULL THEN UDS_MOV END)), 3) AS L_POR_UD,\n    ROUND(SAFE_DIVIDE(SUM(PESO_TOTAL), SUM(UDS_MOV)), 3) AS KG_POR_UD,\n    SUM(UDS_SIN_VOL) AS UDS_SIN_VOLUMEN,\n    ROUND(SAFE_DIVIDE(SUM(UDS_CON_VOL), SUM(UDS_CON_VOL) + SUM(UDS_SIN_VOL)) * 100, 1) AS PCT_COBERTURA_VOL\n  FROM BASE\n  GROUP BY FECHA, HORA\n),\n\n-- ================================================================\n-- PESO Y VOLUMEN POR TOTE — auto-ajuste vía FN_API_TIMEZONE\n-- ================================================================\nTOTE_PESO AS (\n  SELECT\n    DATE(`your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS FECHA,\n    EXTRACT(HOUR FROM `your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM)) AS HORA,\n    m.ADDRESS_TO AS tote_address,\n    SUM(CAST(m.FBM_QUANTITY AS FLOAT64) * COALESCE(c.PESO_KG, 0)) AS tote_weight_kg,\n    SUM(CAST(m.FBM_QUANTITY AS FLOAT64) * c.VOL_LITROS) AS tote_vol_litros\n  FROM `your-project.source.STOCK_MOVEMENTS` m\n  INNER JOIN OPS_DCI ops\n    ON ops.OPERATOR_ID = CAST(m.FBM_USER_ID AS STRING)\n   AND ops.FECHA = DATE(`your-project.udf.FN_TIMEZONE`('MLC', m.AUD_INS_DTTM))\n  INNER JOIN CUBING c ON m.INVENTORY_ID = c.INVENTORY_ID AND c.FLAG_TOTABLE IS TRUE\n  WHERE m.WAREHOUSE_ID = 'CD-01'\n    AND m.FBM_REASON_PROCESS = 'inbound'\n    AND m.ADDRESS_FROM IS NULL\n    AND m.ADDRESS_TO LIKE 'MU-%'\n    AND m.AUD_INS_DTTM >= DATETIME(TIMESTAMP(DATE_SUB(CURRENT_DATE('America/Santiago'), INTERVAL 30 DAY), 'America/Santiago'))\n    AND m.AUD_INS_DTTM <  DATETIME(TIMESTAMP(DATE_ADD(CURRENT_DATE('America/Santiago'), INTERVAL 1 DAY), 'America/Santiago'))\n  GROUP BY FECHA, HORA, tote_address\n),\n\nTOTE_BINS AS (\n  SELECT\n    FECHA, HORA,\n    COUNT(*) AS TOTAL_TOTES,\n    ROUND(AVG(tote_weight_kg), 2) AS KG_POR_TOTE_AVG,\n    ROUND(SUM(tote_weight_kg), 2) AS KG_TOTAL_TOTES,\n    COUNTIF(tote_weight_kg > 0 AND tote_weight_kg <= 2) AS N_TOTES_0_2,\n    COUNTIF(tote_weight_kg > 2 AND tote_weight_kg <= 4) AS N_TOTES_2_4,\n    COUNTIF(tote_weight_kg > 4 AND tote_weight_kg <= 6) AS N_TOTES_4_6,\n    COUNTIF(tote_weight_kg > 6 AND tote_weight_kg <= 8) AS N_TOTES_6_8,\n    COUNTIF(tote_weight_kg > 8 AND tote_weight_kg <= 10) AS N_TOTES_8_10,\n    COUNTIF(tote_weight_kg > 10 AND tote_weight_kg <= 12) AS N_TOTES_10_12,\n    COUNTIF(tote_weight_kg > 12 AND tote_weight_kg <= 16) AS N_TOTES_12_16,\n    COUNTIF(tote_weight_kg > 16) AS N_TOTES_16_MAS,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 0 AND tote_weight_kg <= 2), COUNT(*)) * 100, 1) AS PCT_TOTES_0_2,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 2 AND tote_weight_kg <= 4), COUNT(*)) * 100, 1) AS PCT_TOTES_2_4,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 4 AND tote_weight_kg <= 6), COUNT(*)) * 100, 1) AS PCT_TOTES_4_6,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 6 AND tote_weight_kg <= 8), COUNT(*)) * 100, 1) AS PCT_TOTES_6_8,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 8 AND tote_weight_kg <= 10), COUNT(*)) * 100, 1) AS PCT_TOTES_8_10,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 10 AND tote_weight_kg <= 12), COUNT(*)) * 100, 1) AS PCT_TOTES_10_12,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 12 AND tote_weight_kg <= 16), COUNT(*)) * 100, 1) AS PCT_TOTES_12_16,\n    ROUND(SAFE_DIVIDE(COUNTIF(tote_weight_kg > 16), COUNT(*)) * 100, 1) AS PCT_TOTES_16_MAS,\n    ROUND(AVG(LEAST(SAFE_DIVIDE(COALESCE(tote_vol_litros, 0), 51.408) * 100, 100.0)), 1) AS PCT_VOL_FULL_AVG,\n    ROUND(AVG(LEAST(SAFE_DIVIDE(tote_weight_kg, 15.0) * 100, 100.0)), 1) AS PCT_PESO_FULL_AVG,\n    ROUND(AVG(LEAST(GREATEST(SAFE_DIVIDE(COALESCE(tote_vol_litros, 0), 51.408), SAFE_DIVIDE(tote_weight_kg, 15.0)) * 100, 100.0)), 1) AS PCT_SATURA_FULL_AVG\n  FROM TOTE_PESO\n  GROUP BY FECHA, HORA\n),\n\nDCI_BASE AS (\n  SELECT\n    rs.FECHA, rs.HORA,\n    rs.TOTAL_REPS, rs.N_NH1, rs.N_NH2, rs.N_NH3, rs.N_NATIVO, rs.N_PT, rs.N_PALANCA_EXT,\n    rs.PCT_NH1, rs.PCT_NH2, rs.PCT_NH3, rs.PCT_NATIVO, rs.PCT_PT, rs.PCT_PALANCA_EXT,\n    rd.TOTAL_REPS_DIA, rd.N_NH1_DIA, rd.N_NH2_DIA, rd.N_NH3_DIA, rd.N_NATIVO_DIA, rd.N_PT_DIA, rd.N_PALANCA_EXT_DIA,\n    rd.PCT_NH1_DIA, rd.PCT_NH2_DIA, rd.PCT_NH3_DIA, rd.PCT_NATIVO_DIA, rd.PCT_PT_DIA, rd.PCT_PALANCA_EXT_DIA,\n    COALESCE(v.UDS_DCI, 0) AS UDS_DCI,\n    v.VOL_L_TOTAL, v.L_POR_UD, v.KG_POR_UD,\n    COALESCE(v.UDS_SIN_VOLUMEN, 0) AS UDS_SIN_VOLUMEN,\n    COALESCE(v.PCT_COBERTURA_VOL, 0) AS PCT_COBERTURA_VOL,\n    vr.L_POR_UD_TOTEABLE, vr.L_POR_UD_NO_TOTEABLE, vr.KG_POR_UD_TOTEABLE, vr.KG_POR_UD_NO_TOTEABLE,\n    CAST(ROUND(COALESCE(v.UDS_DCI, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) AS UDS_TOTEABLE,\n    COALESCE(v.UDS_DCI, 0) - CAST(ROUND(COALESCE(v.UDS_DCI, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) AS UDS_NO_TOTEABLE,\n    CAST(ROUND(CAST(ROUND(COALESCE(v.UDS_DCI, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_XS, 0)) AS INT64) AS UDS_XS,\n    CAST(ROUND(CAST(ROUND(COALESCE(v.UDS_DCI, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_S, 0)) AS INT64) AS UDS_S,\n    CAST(ROUND(CAST(ROUND(COALESCE(v.UDS_DCI, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_M, 0)) AS INT64) AS UDS_M,\n    CAST(ROUND(CAST(ROUND(COALESCE(v.UDS_DCI, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_L, 0)) AS INT64) AS UDS_L,\n    CAST(ROUND(COALESCE(v.UDS_DCI, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64)\n      - CAST(ROUND(CAST(ROUND(COALESCE(v.UDS_DCI, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_XS, 0)) AS INT64)\n      - CAST(ROUND(CAST(ROUND(COALESCE(v.UDS_DCI, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_S, 0)) AS INT64)\n      - CAST(ROUND(CAST(ROUND(COALESCE(v.UDS_DCI, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_M, 0)) AS INT64)\n      - CAST(ROUND(CAST(ROUND(COALESCE(v.UDS_DCI, 0) * COALESCE(tf.PCT_TOTEABLE, 0)) AS INT64) * COALESCE(tl.PCT_L, 0)) AS INT64) AS UDS_XL,\n    COALESCE(tb.TOTAL_TOTES, 0) AS TOTAL_TOTES,\n    tb.KG_POR_TOTE_AVG, tb.KG_TOTAL_TOTES,\n    COALESCE(tb.N_TOTES_0_2, 0) AS N_TOTES_0_2,\n    COALESCE(tb.N_TOTES_2_4, 0) AS N_TOTES_2_4,\n    COALESCE(tb.N_TOTES_4_6, 0) AS N_TOTES_4_6,\n    COALESCE(tb.N_TOTES_6_8, 0) AS N_TOTES_6_8,\n    COALESCE(tb.N_TOTES_8_10, 0) AS N_TOTES_8_10,\n    COALESCE(tb.N_TOTES_10_12, 0) AS N_TOTES_10_12,\n    COALESCE(tb.N_TOTES_12_16, 0) AS N_TOTES_12_16,\n    COALESCE(tb.N_TOTES_16_MAS, 0) AS N_TOTES_16_MAS,\n    tb.PCT_TOTES_0_2, tb.PCT_TOTES_2_4, tb.PCT_TOTES_4_6, tb.PCT_TOTES_6_8,\n    tb.PCT_TOTES_8_10, tb.PCT_TOTES_10_12, tb.PCT_TOTES_12_16, tb.PCT_TOTES_16_MAS,\n    tb.PCT_VOL_FULL_AVG, tb.PCT_PESO_FULL_AVG, tb.PCT_SATURA_FULL_AVG\n  FROM REP_SHARE rs\n  LEFT JOIN REP_DIA rd ON rd.FECHA = rs.FECHA\n  LEFT JOIN VOLUMETRIA v ON v.FECHA = rs.FECHA AND v.HORA = rs.HORA\n  LEFT JOIN VOL_RATIO vr ON vr.FECHA = rs.FECHA AND vr.HORA = rs.HORA\n  LEFT JOIN TOT_FLAG tf ON tf.FECHA = rs.FECHA AND tf.HORA = rs.HORA\n  LEFT JOIN TOTE_LMS tl ON tl.FECHA = rs.FECHA AND tl.HORA = rs.HORA\n  LEFT JOIN TOTE_BINS tb ON tb.FECHA = rs.FECHA AND tb.HORA = rs.HORA\n)\n\nSELECT\n  *,\n  ROUND(SAFE_DIVIDE(UDS_TOTEABLE, NULLIF(UDS_DCI, 0)) * 100, 1) AS PCT_TOTEABLE,\n  ROUND(SAFE_DIVIDE(UDS_XS, NULLIF(UDS_TOTEABLE, 0)) * 100, 1) AS PCT_TOTE_XS,\n  ROUND(SAFE_DIVIDE(UDS_S,  NULLIF(UDS_TOTEABLE, 0)) * 100, 1) AS PCT_TOTE_S,\n  ROUND(SAFE_DIVIDE(UDS_M,  NULLIF(UDS_TOTEABLE, 0)) * 100, 1) AS PCT_TOTE_M,\n  ROUND(SAFE_DIVIDE(UDS_L,  NULLIF(UDS_TOTEABLE, 0)) * 100, 1) AS PCT_TOTE_L,\n  ROUND(SAFE_DIVIDE(UDS_XL, NULLIF(UDS_TOTEABLE, 0)) * 100, 1) AS PCT_TOTE_XL\nFROM DCI_BASE\nORDER BY FECHA, HORA;",
+        "options": {}
+      },
+      "id": "d55df27f-85cf-4af9-91a9-c8aa37e9df0f",
+      "name": "PEAK_DCI_HORA",
+      "type": "n8n-nodes-base.googleBigQuery",
+      "position": [
+        -80,
+        -720
+      ],
+      "typeVersion": 2.1,
+      "retryOnFail": true,
+      "credentials": {
+        "googleGenericOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google BigQuery OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "projectId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "=YOUR_GCP_PROJECT_ID"
+        },
+        "sqlQuery": "-- Nodo PEAK_DCI\nSELECT 'DCI' AS PROCESO, * \nFROM `your-project.analytics.DCI_HORA` \nORDER BY FECHA, HORA",
+        "options": {}
+      },
+      "id": "0751e497-1a46-49b8-99dd-9462a87af17b",
+      "name": "PEAK_DCI",
+      "type": "n8n-nodes-base.googleBigQuery",
+      "position": [
+        -80,
+        -320
+      ],
+      "typeVersion": 2.1,
+      "credentials": {
+        "googleGenericOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google BigQuery OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "id": "4d9200c0-608c-4d58-954d-32c5ca211fea",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        192,
+        -512
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://YOUR_DASHBOARD_HOST/api/v1/documents/YOUR_DOCUMENT_ID/datasets/putaway_data/upload-url",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "options": {}
+      },
+      "id": "f37863bf-aeb4-48fb-87c0-33139131e074",
+      "name": "HTTP 1",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        560,
+        -496
+      ],
+      "executeOnce": true,
+      "typeVersion": 4.3,
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Dashboard API Bearer token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $items(\"HTTP 1\")[0].json.upload_url }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($('Aggregate1').first().json.data) }}",
+        "options": {}
+      },
+      "id": "22eb68aa-de67-40e6-8d4c-67dc14abb8b7",
+      "name": "HTTP 2",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        960,
+        -496
+      ],
+      "executeOnce": true,
+      "typeVersion": 4.3,
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "maxTries": 5
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "id": "0ed70fb3-104f-40f7-8ef2-8627fa2ed9eb",
+      "name": "Aggregate1",
+      "type": "n8n-nodes-base.aggregate",
+      "position": [
+        368,
+        -496
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://YOUR_DASHBOARD_HOST' + $('HTTP 1').first().json.publish_url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {\"revision\": $('HTTP 1').first().json.revision} }}",
+        "options": {}
+      },
+      "id": "462da28a-bae8-42ac-aa80-6328aaadcbed",
+      "name": "HTTP FINAL",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        1152,
+        -496
+      ],
+      "executeOnce": true,
+      "typeVersion": 4.3,
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Dashboard API Bearer token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "dcb74f7a-c84c-4883-a6cb-23e063cf2461",
+      "name": "Flujo",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [
+        -400,
+        -464
+      ],
+      "typeVersion": 1.2
+    },
+    {
+      "parameters": {
+        "projectId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "=YOUR_GCP_PROJECT_ID"
+        },
+        "sqlQuery": "-- Nodo PEAK_CHECKIN\nSELECT 'CHECKIN' AS PROCESO, * \nFROM `your-project.analytics.CHECKIN_HORA` \nORDER BY FECHA, HORA\n",
+        "options": {}
+      },
+      "id": "ac310d38-b369-4630-a36b-6fa13087d15f",
+      "name": "PEAK_CHECKIN",
+      "type": "n8n-nodes-base.googleBigQuery",
+      "position": [
+        -80,
+        -448
+      ],
+      "typeVersion": 2.1,
+      "credentials": {
+        "googleGenericOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google BigQuery OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        768,
+        -496
+      ],
+      "id": "8c59c958-b14d-4473-8678-748ea6bd2feb",
+      "name": "Wait"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Flujo": {
+      "main": [
+        [
+          {
+            "node": "PEAK_PUTAWAY",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PEAK_DCI",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PEAK_PUTAWAY_HORA",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PEAK_CHECKIN_HORA",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PEAK_DCI_HORA",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PEAK_CHECKIN",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Aggregate1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP 1": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP 2": {
+      "main": [
+        [
+          {
+            "node": "HTTP FINAL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PEAK_DCI": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Aggregate1": {
+      "main": [
+        [
+          {
+            "node": "HTTP 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PEAK_PUTAWAY": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PEAK_DCI_HORA": {
+      "main": [
+        []
+      ]
+    },
+    "PEAK_CHECKIN": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "HTTP 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
